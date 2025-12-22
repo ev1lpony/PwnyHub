@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 import json
-from fastapi import FastAPI, UploadFile, File
+from typing import Any, Dict, List
+
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import select
 
-from .db import init_db, get_session, Project, HarEntry
-from .har_import import parse_har, is_asset_mime
-
-from sqlmodel import select
-from .db import HarEntry, get_session
-from .actions import build_actions, actions_to_json
-
+from .actions import actions_to_json, build_actions
+from .db import HarEntry, Project, get_session, init_db
+from .har_import import is_asset_mime, parse_har
+from .risk import attach_risk
 
 app = FastAPI(title="PwnyHub Engine", version="0.1.0")
 
@@ -27,10 +26,14 @@ app.add_middleware(
 )
 
 
-
 @app.on_event("startup")
 def _startup() -> None:
     init_db()
+
+
+@app.get("/")
+def root():
+    return {"ok": True, "service": "pwnyhub-engine", "docs": "/docs"}
 
 
 @app.get("/health")
@@ -38,31 +41,71 @@ def health():
     return {"ok": True}
 
 
+def _coerce_scope(value: Any) -> str:
+    """
+    Accept either:
+      - newline-separated string
+      - list[str]
+      - None
+    Return newline-separated string for DB storage.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return "\n".join(str(x).strip() for x in value if str(x).strip())
+    return str(value).strip()
+
+
 @app.post("/projects")
-def create_project(payload: dict):
-    name = payload.get("name") or "Untitled"
-    scope_allow = "\n".join(payload.get("scope_allow") or [])
-    scope_deny = "\n".join(payload.get("scope_deny") or [])
-    qps = float(payload.get("qps") or 3.0)
+def create_project(payload: Dict[str, Any] = Body(...)):
+    name = (payload.get("name") or "Untitled").strip()
+
+    scope_allow = _coerce_scope(payload.get("scope_allow"))
+    scope_deny = _coerce_scope(payload.get("scope_deny"))
+
+    try:
+        qps = float(payload.get("qps") or 3.0)
+    except Exception:
+        qps = 3.0
 
     p = Project(name=name, scope_allow=scope_allow, scope_deny=scope_deny, qps=qps)
+
     with get_session() as s:
         s.add(p)
         s.commit()
         s.refresh(p)
-    return {"id": p.id, "name": p.name}
+
+    return {"id": p.id, "name": p.name, "qps": p.qps}
 
 
 @app.get("/projects")
 def list_projects():
     with get_session() as s:
         rows = s.exec(select(Project)).all()
-    return [{"id": r.id, "name": r.name, "qps": r.qps} for r in rows]
+
+    return [
+        {
+            "id": r.id,
+            "name": r.name,
+            "qps": r.qps,
+        }
+        for r in rows
+    ]
 
 
 @app.post("/import/har")
-def import_har(project_id: int, har: UploadFile = File(...), include_assets: bool = False):
-    har_bytes = har.file.read()
+def import_har(
+    project_id: int = Form(...),
+    file: UploadFile = File(...),
+    include_assets: bool = Form(False),
+):
+    # Ensure project exists (nice error instead of silently inserting)
+    with get_session() as s:
+        p = s.get(Project, project_id)
+        if not p:
+            raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
+
+    har_bytes = file.file.read()
     items = parse_har(har_bytes)
 
     inserted = 0
@@ -92,6 +135,7 @@ def import_har(project_id: int, har: UploadFile = File(...), include_assets: boo
             )
             s.add(row)
             inserted += 1
+
         s.commit()
 
     return {"inserted": inserted, "skipped_assets": skipped_assets, "total": len(items)}
@@ -102,28 +146,42 @@ def project_summary(project_id: int):
     with get_session() as s:
         rows = s.exec(select(HarEntry).where(HarEntry.project_id == project_id)).all()
 
-    by_host = {}
-    by_mime = {}
+    by_host: Dict[str, int] = {}
+    by_mime: Dict[str, int] = {}
+
     for r in rows:
-        by_host[r.host] = by_host.get(r.host, 0) + 1
-        by_mime[r.mime] = by_mime.get(r.mime, 0) + 1
+        h = (r.host or "").strip()
+        m = (r.mime or "").strip()
+        if h:
+            by_host[h] = by_host.get(h, 0) + 1
+        if m:
+            by_mime[m] = by_mime.get(m, 0) + 1
+
+    # Sort then convert back to dict to keep UI simple (Object.entries)
+    hosts_sorted = sorted(by_host.items(), key=lambda x: x[1], reverse=True)[:25]
+    mimes_sorted = sorted(by_mime.items(), key=lambda x: x[1], reverse=True)[:25]
 
     return {
+        "project_id": project_id,
         "entries": len(rows),
-        "hosts": sorted(by_host.items(), key=lambda x: x[1], reverse=True)[:25],
-        "mimes": sorted(by_mime.items(), key=lambda x: x[1], reverse=True)[:25],
+        "entries_stored": len(rows),  # backward compat for UI
+        "hosts": {k: v for (k, v) in hosts_sorted},
+        "mimes": {k: v for (k, v) in mimes_sorted},
     }
 
-@app.get("/")
-def root():
-    return {"ok": True, "service": "pwnyhub-engine", "docs": "/docs"}
 
 @app.get("/actions")
-def actions(project_id: int):
+def actions(
+    project_id: int,
+    include_risk: bool = True,
+):
     with get_session() as s:
-        entries = s.exec(
-            select(HarEntry).where(HarEntry.project_id == project_id)
-        ).all()
+        entries = s.exec(select(HarEntry).where(HarEntry.project_id == project_id)).all()
 
     acts = build_actions(entries)
-    return {"project_id": project_id, "actions": actions_to_json(acts)}
+    out = actions_to_json(acts)
+
+    if include_risk:
+        out = attach_risk(out)
+
+    return {"project_id": project_id, "actions": out}
