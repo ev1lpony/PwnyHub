@@ -8,6 +8,11 @@ from sqlmodel import select
 from .db import init_db, get_session, Project, HarEntry
 from .har_import import parse_har, is_asset_mime
 
+from sqlmodel import select
+from .db import HarEntry, get_session
+from .actions import build_actions, actions_to_json
+
+
 app = FastAPI(title="PwnyHub Engine", version="0.1.0")
 
 app.add_middleware(
@@ -112,3 +117,13 @@ def project_summary(project_id: int):
 @app.get("/")
 def root():
     return {"ok": True, "service": "pwnyhub-engine", "docs": "/docs"}
+
+@app.get("/actions")
+def actions(project_id: int):
+    with get_session() as s:
+        entries = s.exec(
+            select(HarEntry).where(HarEntry.project_id == project_id)
+        ).all()
+
+    acts = build_actions(entries)
+    return {"project_id": project_id, "actions": actions_to_json(acts)}
