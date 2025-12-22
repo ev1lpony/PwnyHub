@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs
+import json
 import re
 
 
@@ -80,6 +81,63 @@ def normalize_path(path: str) -> str:
     return "/" + "/".join(norm)
 
 
+def path_depth(path_template: str) -> int:
+    """
+    Depth as number of segments (excluding leading slash).
+    "/" => 0, "/a/b" => 2
+    """
+    if not path_template or path_template == "/":
+        return 0
+    return len([p for p in path_template.split("/") if p])
+
+
+def _lower_keys(d: Dict[str, Any]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for k, v in (d or {}).items():
+        kk = str(k).strip().lower()
+        out[kk] = v
+    return out
+
+
+def _parse_headers_maybe(x: Any) -> Dict[str, Any]:
+    """
+    Accept dict-like, or JSON string, or list of {name,value} pairs (HAR-ish),
+    and return a lowercase-key dict.
+    """
+    if not x:
+        return {}
+
+    # Already dict
+    if isinstance(x, dict):
+        return _lower_keys(x)
+
+    # HAR-like list of {"name":..., "value":...}
+    if isinstance(x, list):
+        out: Dict[str, Any] = {}
+        for it in x:
+            if not isinstance(it, dict):
+                continue
+            name = (it.get("name") or it.get("key") or "").strip().lower()
+            if not name:
+                continue
+            out[name] = it.get("value")
+        return out
+
+    # JSON string
+    if isinstance(x, (str, bytes)):
+        try:
+            s = x.decode("utf-8", errors="ignore") if isinstance(x, bytes) else x
+            s = s.strip()
+            if not s:
+                return {}
+            obj = json.loads(s)
+            return _parse_headers_maybe(obj)
+        except Exception:
+            return {}
+
+    return {}
+
+
 def get_entry_method(entry: Any) -> str:
     for attr in ("method", "request_method"):
         if hasattr(entry, attr) and getattr(entry, attr):
@@ -88,10 +146,16 @@ def get_entry_method(entry: Any) -> str:
 
 
 def get_entry_status(entry: Any) -> Optional[int]:
+    """
+    Treat 0 as "unknown/no response" (common in captures) rather than a real status.
+    """
     for attr in ("status", "response_status", "status_code"):
         if hasattr(entry, attr) and getattr(entry, attr) is not None:
             try:
-                return int(getattr(entry, attr))
+                v = int(getattr(entry, attr))
+                if v == 0:
+                    return None
+                return v
             except Exception:
                 return None
     return None
@@ -145,6 +209,20 @@ def entry_has_body(entry: Any) -> bool:
     return False
 
 
+def get_entry_req_headers(entry: Any) -> Dict[str, Any]:
+    for attr in ("req_headers", "request_headers", "req_headers_json", "request_headers_json"):
+        if hasattr(entry, attr) and getattr(entry, attr):
+            return _parse_headers_maybe(getattr(entry, attr))
+    return {}
+
+
+def get_entry_resp_headers(entry: Any) -> Dict[str, Any]:
+    for attr in ("resp_headers", "response_headers", "resp_headers_json", "response_headers_json"):
+        if hasattr(entry, attr) and getattr(entry, attr):
+            return _parse_headers_maybe(getattr(entry, attr))
+    return {}
+
+
 def build_sample_url(entry: Any) -> str:
     """
     Prefer stored full URL if available, else reconstruct from host/path/query.
@@ -194,6 +272,16 @@ class ActionRow:
     top_mimes: List[Dict[str, Any]]
     top_query_keys: List[Dict[str, Any]]
 
+    # more upgrades (triage + auth surface signals)
+    path_depth: int
+    query_key_count: int
+    avg_query_keys: float
+    has_auth_header: bool
+    has_cookie_header: bool
+    sets_cookie: bool
+    req_content_type: str
+    top_req_content_types: List[Dict[str, Any]]
+
 
 def build_actions(entries: List[Any], sample_limit: int = 3) -> List[ActionRow]:
     """
@@ -210,6 +298,7 @@ def build_actions(entries: List[Any], sample_limit: int = 3) -> List[ActionRow]:
 
         path_t = normalize_path(path)
         q_keys = sorted(parse_qs(query, keep_blank_values=True).keys())
+        qk_len = len(q_keys)
 
         k = (method, host, path_t)
 
@@ -226,13 +315,21 @@ def build_actions(entries: List[Any], sample_limit: int = 3) -> List[ActionRow]:
                 "time_n": 0,
                 "query_key_set": set(),
                 "query_key_counts": {},   # str -> count
+                "query_keys_sum": 0,      # sum(len(q_keys)) for avg_query_keys
                 "has_body": False,
                 "sample_urls": [],        # preserve insertion order
+
+                # header surface signals
+                "has_auth_header": False,
+                "has_cookie_header": False,
+                "sets_cookie": False,
+                "req_ct_counts": {},      # str -> count
             }
 
         b["count"] += 1
+        b["query_keys_sum"] += qk_len
 
-        # status
+        # status (0 treated as unknown in get_entry_status)
         st = get_entry_status(e)
         if st is not None:
             b["status_set"].add(st)
@@ -263,6 +360,24 @@ def build_actions(entries: List[Any], sample_limit: int = 3) -> List[ActionRow]:
         if not b["has_body"] and entry_has_body(e):
             b["has_body"] = True
 
+        # header presence signals (no payloads, just booleans + content-type)
+        req_h = get_entry_req_headers(e)
+        if req_h:
+            if (not b["has_auth_header"]) and ("authorization" in req_h):
+                b["has_auth_header"] = True
+            if (not b["has_cookie_header"]) and ("cookie" in req_h):
+                b["has_cookie_header"] = True
+
+            ct = req_h.get("content-type")
+            if ct:
+                ct_s = str(ct).split(";")[0].strip().lower()
+                if ct_s:
+                    b["req_ct_counts"][ct_s] = b["req_ct_counts"].get(ct_s, 0) + 1
+
+        resp_h = get_entry_resp_headers(e)
+        if resp_h and (not b["sets_cookie"]) and ("set-cookie" in resp_h):
+            b["sets_cookie"] = True
+
         # sample urls
         if len(b["sample_urls"]) < sample_limit:
             su = build_sample_url(e)
@@ -276,6 +391,13 @@ def build_actions(entries: List[Any], sample_limit: int = 3) -> List[ActionRow]:
         avg_bytes = int(b["resp_bytes_sum"] / b["resp_bytes_n"]) if b["resp_bytes_n"] else 0
         avg_time = float(b["time_sum"] / b["time_n"]) if b["time_n"] else 0.0
 
+        qk_unique = sorted(list(b["query_key_set"]))
+        qk_unique_count = len(qk_unique)
+        avg_qk = float(b["query_keys_sum"] / b["count"]) if b["count"] else 0.0
+
+        req_ct_counts: Dict[str, int] = b["req_ct_counts"]
+        top_req_ct = max(req_ct_counts.items(), key=lambda kv: kv[1])[0] if req_ct_counts else ""
+
         key = f"{method}|{host}|{path_t}"
 
         out.append(
@@ -288,7 +410,7 @@ def build_actions(entries: List[Any], sample_limit: int = 3) -> List[ActionRow]:
                 status_codes=sorted(list(b["status_set"])),
                 top_mime=top_mime,
                 avg_resp_bytes=avg_bytes,
-                query_keys=sorted(list(b["query_key_set"])),
+                query_keys=qk_unique,
 
                 avg_time_ms=avg_time,
                 has_body=bool(b["has_body"]),
@@ -296,6 +418,15 @@ def build_actions(entries: List[Any], sample_limit: int = 3) -> List[ActionRow]:
                 top_statuses=top_k_int_counts(b["status_counts"], k=5),
                 top_mimes=top_k_counts(b["mime_counts"], k=5),
                 top_query_keys=top_k_counts(b["query_key_counts"], k=8),
+
+                path_depth=path_depth(path_t),
+                query_key_count=qk_unique_count,
+                avg_query_keys=avg_qk,
+                has_auth_header=bool(b["has_auth_header"]),
+                has_cookie_header=bool(b["has_cookie_header"]),
+                sets_cookie=bool(b["sets_cookie"]),
+                req_content_type=top_req_ct,
+                top_req_content_types=top_k_counts(req_ct_counts, k=5),
             )
         )
 
@@ -327,6 +458,16 @@ def actions_to_json(actions: List[ActionRow]) -> List[Dict[str, Any]]:
             "top_statuses": a.top_statuses,
             "top_mimes": a.top_mimes,
             "top_query_keys": a.top_query_keys,
+
+            # more upgrades (triage + auth surface signals)
+            "path_depth": a.path_depth,
+            "query_key_count": a.query_key_count,
+            "avg_query_keys": a.avg_query_keys,
+            "has_auth_header": a.has_auth_header,
+            "has_cookie_header": a.has_cookie_header,
+            "sets_cookie": a.sets_cookie,
+            "req_content_type": a.req_content_type,
+            "top_req_content_types": a.top_req_content_types,
         }
         for a in actions
     ]

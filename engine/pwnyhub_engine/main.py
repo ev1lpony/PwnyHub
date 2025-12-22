@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -56,6 +57,95 @@ def _coerce_scope(value: Any) -> str:
     return str(value).strip()
 
 
+def _normalize_scope_pattern(raw: str) -> Optional[str]:
+    """
+    Normalize a user-provided scope line into a host pattern.
+    Supports:
+      - example.com
+      - *.example.com
+      - https://example.com/foo
+      - example.com:443
+      - localhost / 127.0.0.1
+    Returns None if unusable.
+    """
+    s = (raw or "").strip()
+    if not s:
+        return None
+
+    s = s.strip()
+
+    # If they pasted a URL, parse it and use netloc
+    if "://" in s:
+        try:
+            u = urlparse(s)
+            host = (u.netloc or "").strip()
+        except Exception:
+            host = s
+    else:
+        # Could still include paths like example.com/foo
+        # Split off path/query fragments defensively.
+        host = s.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0].strip()
+
+    if not host:
+        return None
+
+    host = host.lower()
+
+    # If they included credentials (rare), strip them: user:pass@host
+    if "@" in host:
+        host = host.split("@", 1)[1]
+
+    # Strip port if present (except wildcard patterns where : is still a port delimiter)
+    # "*.example.com:443" -> "*.example.com"
+    if ":" in host:
+        host = host.split(":", 1)[0]
+
+    host = host.strip()
+    if not host:
+        return None
+
+    return host
+
+
+def _parse_scope_lines(scope_text: str) -> List[str]:
+    """
+    Convert stored newline-separated scope into normalized host patterns.
+
+    Convenience behavior:
+      - "example.com" becomes ["example.com", "*.example.com"]
+      - wildcard patterns (e.g. "*.foo.com") are preserved
+      - blank lines ignored
+      - URLs are accepted and normalized to host patterns
+    """
+    out: List[str] = []
+
+    for raw in (scope_text or "").splitlines():
+        p = _normalize_scope_pattern(raw)
+        if not p:
+            continue
+
+        # If user already used wildcard (or any *), keep as-is.
+        if "*" in p:
+            out.append(p)
+            continue
+
+        # Keep exact host
+        out.append(p)
+
+        # Add subdomain wildcard for normal domains (skip localhost-ish)
+        if p not in ("localhost", "127.0.0.1") and "." in p and not p.startswith("."):
+            out.append(f"*.{p}")
+
+    # Dedup while keeping order
+    seen = set()
+    deduped: List[str] = []
+    for x in out:
+        if x not in seen:
+            seen.add(x)
+            deduped.append(x)
+    return deduped
+
+
 @app.post("/projects")
 def create_project(payload: Dict[str, Any] = Body(...)):
     name = (payload.get("name") or "Untitled").strip()
@@ -82,15 +172,7 @@ def create_project(payload: Dict[str, Any] = Body(...)):
 def list_projects():
     with get_session() as s:
         rows = s.exec(select(Project)).all()
-
-    return [
-        {
-            "id": r.id,
-            "name": r.name,
-            "qps": r.qps,
-        }
-        for r in rows
-    ]
+    return [{"id": r.id, "name": r.name, "qps": r.qps} for r in rows]
 
 
 @app.post("/import/har")
@@ -157,16 +239,19 @@ def project_summary(project_id: int):
         if m:
             by_mime[m] = by_mime.get(m, 0) + 1
 
-    # Sort then convert back to dict to keep UI simple (Object.entries)
+    # UI currently expects arrays of [key, count]
     hosts_sorted = sorted(by_host.items(), key=lambda x: x[1], reverse=True)[:25]
     mimes_sorted = sorted(by_mime.items(), key=lambda x: x[1], reverse=True)[:25]
 
     return {
         "project_id": project_id,
         "entries": len(rows),
-        "entries_stored": len(rows),  # backward compat for UI
-        "hosts": {k: v for (k, v) in hosts_sorted},
-        "mimes": {k: v for (k, v) in mimes_sorted},
+        "entries_stored": len(rows),  # backward compat
+        "hosts": [[k, v] for (k, v) in hosts_sorted],
+        "mimes": [[k, v] for (k, v) in mimes_sorted],
+        # Extra (future-proof): maps for quick lookups / charts
+        "hosts_map": {k: v for (k, v) in hosts_sorted},
+        "mimes_map": {k: v for (k, v) in mimes_sorted},
     }
 
 
@@ -175,13 +260,31 @@ def actions(
     project_id: int,
     include_risk: bool = True,
 ):
+    # Load project to get scope allow/deny for risk scoring (and to 404 nicely)
     with get_session() as s:
+        p = s.get(Project, project_id)
+        if not p:
+            raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
+
         entries = s.exec(select(HarEntry).where(HarEntry.project_id == project_id)).all()
 
     acts = build_actions(entries)
     out = actions_to_json(acts)
 
-    if include_risk:
-        out = attach_risk(out)
+    allow_hosts: List[str] = []
+    deny_hosts: List[str] = []
 
-    return {"project_id": project_id, "actions": out}
+    if include_risk:
+        allow_hosts = _parse_scope_lines(p.scope_allow or "")
+        deny_hosts = _parse_scope_lines(p.scope_deny or "")
+        out = attach_risk(out, allow_hosts=allow_hosts, deny_hosts=deny_hosts)
+
+    return {
+        "project_id": project_id,
+        "actions": out,
+        "risk_included": bool(include_risk),
+        "scope": {
+            "allow_hosts": allow_hosts,
+            "deny_hosts": deny_hosts,
+        },
+    }

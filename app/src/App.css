@@ -2,12 +2,73 @@
   --bg: #ffffff;
   --panel: #ffffff;
   --border: #e6e6e6;
+  --border2: #f0f0f0;
   --muted: #666;
   --muted2: #888;
+
   --accent: #0b66ff;
   --accentSoft: #eaf2ff;
+
+  --ok: #118a00;
+  --bad: #c5162e;
+
   --shadow: 0 10px 30px rgba(0,0,0,.06);
+  --shadow2: 0 14px 40px rgba(0,0,0,.10);
+
   --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+
+  --radius: 14px;
+  --radiusSm: 10px;
+
+  --ring: 0 0 0 3px rgba(11,102,255,.12);
+  --ringStrong: 0 0 0 4px rgba(11,102,255,.18);
+
+  --tableHead: #fafafa;
+  --rowHover: #f7fbff;
+
+  --toastBg: #1d2b1d;
+  --toastFg: #c9ffd0;
+}
+
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg: #0f1216;
+    --panel: #141821;
+    --border: #273041;
+    --border2: #1c2230;
+    --muted: #a7b0bf;
+    --muted2: #8e97a6;
+
+    --accent: #5aa2ff;
+    --accentSoft: rgba(90,162,255,.18);
+
+    --ok: #4cff7a;
+    --bad: #ff4d5e;
+
+    --shadow: 0 12px 30px rgba(0,0,0,.35);
+    --shadow2: 0 18px 50px rgba(0,0,0,.5);
+
+    --ring: 0 0 0 3px rgba(90,162,255,.18);
+    --ringStrong: 0 0 0 4px rgba(90,162,255,.25);
+
+    --tableHead: rgba(255,255,255,.04);
+    --rowHover: rgba(90,162,255,.10);
+
+    --toastBg: rgba(76,255,122,.12);
+    --toastFg: #bfffd0;
+  }
+}
+
+*{ box-sizing: border-box; }
+
+body{
+  margin: 0;
+  background: var(--bg);
+  color: #111;
+}
+
+@media (prefers-color-scheme: dark){
+  body{ color: #e8edf6; }
 }
 
 .ph-wrap{
@@ -15,22 +76,23 @@
   margin: 26px auto;
   padding: 0 18px;
   font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
-  color: #111;
 }
 
 .ph-sub{
-  color: #444;
+  color: var(--muted);
   margin-bottom: 16px;
+  line-height: 1.35;
 }
 
 .ph-card{
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--radius);
   box-shadow: var(--shadow);
   overflow: hidden;
 }
 
+/* Top bar */
 .ph-topbar{
   position: sticky;
   top: 0;
@@ -39,6 +101,12 @@
   backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--border);
   padding: 12px;
+}
+
+@media (prefers-color-scheme: dark){
+  .ph-topbar{
+    background: rgba(20,24,33,.88);
+  }
 }
 
 .ph-row{
@@ -54,37 +122,63 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-weight: 600;
+  font-weight: 700;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255,255,255,.7);
 }
 
-.ph-pill .ok{ color: #118a00; }
-.ph-pill .down{ color: #c5162e; }
+@media (prefers-color-scheme: dark){
+  .ph-pill{
+    background: rgba(255,255,255,.03);
+  }
+}
 
+.ph-pill .ok{ color: var(--ok); }
+.ph-pill .down{ color: var(--bad); }
+
+/* Inputs */
 .ph-input, .ph-select{
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radiusSm);
   padding: 7px 10px;
-  background: #fff;
+  background: rgba(255,255,255,.9);
   outline: none;
+  color: inherit;
+}
+
+@media (prefers-color-scheme: dark){
+  .ph-input, .ph-select{
+    background: rgba(255,255,255,.04);
+  }
 }
 
 .ph-input:focus, .ph-select:focus{
-  border-color: #b8d3ff;
-  box-shadow: 0 0 0 3px rgba(11,102,255,.12);
+  border-color: rgba(11,102,255,.45);
+  box-shadow: var(--ring);
 }
 
+/* Buttons */
 .ph-btn{
   border: 1px solid var(--border);
-  background: #fff;
-  border-radius: 10px;
+  background: rgba(255,255,255,.85);
+  border-radius: var(--radiusSm);
   padding: 7px 11px;
   cursor: pointer;
-  transition: transform .05s ease, box-shadow .15s ease, border-color .15s ease;
+  transition: transform .05s ease, box-shadow .15s ease, border-color .15s ease, background .15s ease;
+  color: inherit;
+}
+
+@media (prefers-color-scheme: dark){
+  .ph-btn{
+    background: rgba(255,255,255,.05);
+  }
 }
 
 .ph-btn:hover{
-  border-color: #cfdcff;
-  box-shadow: 0 6px 16px rgba(0,0,0,.06);
+  border-color: rgba(11,102,255,.25);
+  box-shadow: 0 8px 18px rgba(0,0,0,.10);
 }
 .ph-btn:active{ transform: translateY(1px); }
 .ph-btn:disabled{
@@ -96,18 +190,24 @@
 .ph-msg{
   margin: 12px;
   padding: 10px 12px;
-  border-radius: 10px;
-  background: #f6f6f6;
+  border-radius: var(--radiusSm);
+  background: rgba(0,0,0,.03);
   border: 1px solid var(--border);
-  color: #222;
+  color: inherit;
+}
+
+@media (prefers-color-scheme: dark){
+  .ph-msg{
+    background: rgba(255,255,255,.04);
+  }
 }
 
 .ph-err{
   margin: 12px;
   padding: 10px 12px;
-  border-radius: 10px;
-  background: #ffecec;
-  border: 1px solid #ffb3b3;
+  border-radius: var(--radiusSm);
+  background: rgba(197,22,46,.10);
+  border: 1px solid rgba(197,22,46,.30);
 }
 
 .ph-content{
@@ -117,29 +217,62 @@
 .ph-h2{
   margin: 0 0 10px;
   font-size: 18px;
+  letter-spacing: .2px;
 }
 
 .ph-grid{
   display: grid;
-  grid-template-columns: 1fr 380px;
+  grid-template-columns: 1fr 400px;
   gap: 14px;
   align-items: start;
 }
 
+/* Make details panel "stick" in view for better triage */
 .ph-grid .right{
   border-left: 1px solid var(--border);
   padding-left: 14px;
+  position: sticky;
+  top: 86px; /* below topbar */
+  align-self: start;
+  max-height: calc(100vh - 120px);
+  overflow: auto;
 }
 
+/* Table shell */
 .ph-tableWrap{
   border: 1px solid var(--border);
   border-radius: 12px;
   overflow: hidden;
+  background: rgba(255,255,255,.55);
+}
+
+@media (prefers-color-scheme: dark){
+  .ph-tableWrap{
+    background: rgba(255,255,255,.02);
+  }
 }
 
 .ph-tableScroll{
-  max-height: 520px;           /* <-- makes it feel like a “pane” */
+  max-height: 560px; /* slightly taller now */
   overflow: auto;
+}
+
+/* Scrollbars (subtle) */
+.ph-tableScroll::-webkit-scrollbar,
+.ph-grid .right::-webkit-scrollbar{
+  width: 10px;
+  height: 10px;
+}
+.ph-tableScroll::-webkit-scrollbar-thumb,
+.ph-grid .right::-webkit-scrollbar-thumb{
+  background: rgba(127,127,127,.25);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.ph-tableScroll::-webkit-scrollbar-thumb:hover,
+.ph-grid .right::-webkit-scrollbar-thumb:hover{
+  background: rgba(127,127,127,.35);
 }
 
 table.ph-table{
@@ -152,37 +285,61 @@ table.ph-table thead th{
   position: sticky;
   top: 0;
   z-index: 5;
-  background: #fafafa;
+  background: var(--tableHead);
   border-bottom: 1px solid var(--border);
   text-align: left;
   padding: 10px 8px;
-  font-weight: 700;
+  font-weight: 900;
+  letter-spacing: .15px;
+  user-select: none;
+}
+
+table.ph-table thead th:hover{
+  background: rgba(11,102,255,.06);
+}
+
+@media (prefers-color-scheme: dark){
+  table.ph-table thead th:hover{
+    background: rgba(90,162,255,.10);
+  }
 }
 
 table.ph-table td{
-  border-bottom: 1px solid #f1f1f1;
+  border-bottom: 1px solid var(--border2);
   padding: 9px 8px;
   vertical-align: top;
 }
 
 .ph-mono{ font-family: var(--mono); }
 
+/* Rows */
 tr.ph-tr{
   cursor: pointer;
-  transition: background .12s ease;
-}
-tr.ph-tr:hover{
-  background: #f7fbff;
-}
-tr.ph-tr.selected{
-  background: var(--accentSoft);
+  transition: background .12s ease, box-shadow .12s ease;
 }
 
+tr.ph-tr:hover{
+  background: var(--rowHover);
+}
+
+tr.ph-tr.selected{
+  background: var(--accentSoft);
+  box-shadow: inset 0 0 0 1px rgba(11,102,255,.22);
+}
+
+/* Make selected row pop but not neon */
+@media (prefers-color-scheme: dark){
+  tr.ph-tr.selected{
+    box-shadow: inset 0 0 0 1px rgba(90,162,255,.30);
+  }
+}
+
+/* Key/Value blocks */
 .ph-kv{
   margin: 8px 0;
-  color: #222;
+  color: inherit;
 }
-.ph-kv strong{ color:#111; }
+.ph-kv strong{ color: inherit; }
 
 .ph-small{
   color: var(--muted);
@@ -201,14 +358,72 @@ tr.ph-tr.selected{
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 3px 8px;
-  background: #fff;
+  background: rgba(255,255,255,.8);
+}
+
+@media (prefers-color-scheme: dark){
+  .ph-badge{
+    background: rgba(255,255,255,.04);
+  }
 }
 
 .ph-list{
   padding-left: 18px;
   margin: 8px 0 0;
 }
+
 .ph-list li{
   word-break: break-all;
   margin: 4px 0;
+  line-height: 1.35;
+}
+
+/* Better focus outlines for accessibility */
+.ph-btn:focus-visible,
+.ph-input:focus-visible,
+.ph-select:focus-visible{
+  outline: none;
+  box-shadow: var(--ringStrong);
+  border-color: rgba(11,102,255,.55);
+}
+
+/* Responsive */
+@media (max-width: 980px){
+  .ph-grid{
+    grid-template-columns: 1fr;
+  }
+  .ph-grid .right{
+    position: relative;
+    top: auto;
+    max-height: none;
+    border-left: none;
+    padding-left: 0;
+    border-top: 1px solid var(--border);
+    padding-top: 14px;
+    margin-top: 12px;
+  }
+  .ph-tableScroll{
+    max-height: 520px;
+  }
+}
+
+/* --- Focus mode hooks (optional) ---
+   If you later add a toggle that sets `.ph-wrap.focus` or `.ph-card.focus`,
+   this makes table feel like a triage board.
+*/
+.ph-wrap.focus .ph-sub,
+.ph-wrap.focus .ph-content > div:first-child{
+  display: none;
+}
+
+.ph-wrap.focus .ph-grid{
+  grid-template-columns: 1fr;
+}
+
+.ph-wrap.focus .ph-grid .right{
+  display: none;
+}
+
+.ph-wrap.focus .ph-tableScroll{
+  max-height: calc(100vh - 180px);
 }
