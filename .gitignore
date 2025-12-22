@@ -1,0 +1,97 @@
+############################################
+# OS / editor junk
+############################################
+.DS_Store
+Thumbs.db
+desktop.ini
+
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
+
+.idea/
+*.swp
+*.swo
+
+############################################
+# Logs / temp
+############################################
+*.log
+*.tmp
+*.temp
+
+############################################
+# Node / Vite / Electron
+############################################
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+app/node_modules/
+app/dist/
+app/dist-electron/
+app/.vite/
+app/out/
+app/build/
+app/release/
+
+# Vite / React build artifacts (in case)
+dist/
+build/
+
+############################################
+# Python / venv
+############################################
+__pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+*.pdb
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual envs (you have BOTH root and engine)
+.venv/
+venv/
+env/
+ENV/
+engine/.venv/
+engine/venv/
+
+############################################
+# Python packaging
+############################################
+pip-wheel-metadata/
+*.whl
+
+############################################
+# Databases / local data / artifacts
+############################################
+*.db
+*.sqlite
+*.sqlite3
+
+# If you want to keep a schema or sample DB, whitelist it:
+#!engine/sample.db
+
+# HARs / captures (can include tokens)
+*.har
+*.har.gz
+
+# Evidence / exports
+data/
+artifacts/
+reports/
+
+############################################
+# Secrets
+############################################
+.env
+.env.*
+!.env.example
