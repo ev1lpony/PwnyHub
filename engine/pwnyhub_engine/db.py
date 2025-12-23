@@ -4,6 +4,7 @@ from typing import Optional
 from datetime import datetime, timezone
 
 from sqlmodel import SQLModel, Field, create_engine, Session
+from sqlalchemy import text
 
 
 class Project(SQLModel, table=True):
@@ -12,6 +13,10 @@ class Project(SQLModel, table=True):
     scope_allow: str  # newline-separated domains
     scope_deny: str = ""  # newline-separated domains
     qps: float = 3.0
+
+    # ROE (Rules of Engagement) config stored as JSON string.
+    # Keep as string for schema flexibility while iterating.
+    roe_json: str = "{}"
 
 
 class HarEntry(SQLModel, table=True):
@@ -80,8 +85,30 @@ class Finding(SQLModel, table=True):
 engine = create_engine("sqlite:///pwnyhub.db", echo=False)
 
 
+def _sqlite_column_exists(conn, table: str, column: str) -> bool:
+    rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
+    # PRAGMA table_info returns: cid, name, type, notnull, dflt_value, pk
+    return any(r[1] == column for r in rows)
+
+
+def _sqlite_add_column_if_missing(table: str, column: str, ddl_fragment: str) -> None:
+    # Example ddl_fragment: "TEXT NOT NULL DEFAULT '{}'"
+    with engine.begin() as conn:
+        if not _sqlite_column_exists(conn, table, column):
+            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_fragment}"))
+
+
 def init_db() -> None:
+    # Create tables if they don't exist.
     SQLModel.metadata.create_all(engine)
+
+    # Lightweight forward-only migration for existing SQLite DBs.
+    # SQLModel/SQLAlchemy won't auto-add new columns to an existing table.
+    _sqlite_add_column_if_missing("project", "roe_json", "TEXT NOT NULL DEFAULT '{}'")
+
+    # Optional: keep DB consistent if the column exists but nulls slipped in.
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE project SET roe_json='{}' WHERE roe_json IS NULL"))
 
 
 def get_session() -> Session:

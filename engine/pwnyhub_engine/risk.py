@@ -91,7 +91,10 @@ _DESTRUCTIVE_METHODS = {"DELETE"}
 
 
 # --- regex helpers ---
-_RE_UUID_LIKE = re.compile(r"\{uuid\}|\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b", re.I)
+_RE_UUID_LIKE = re.compile(
+    r"\{uuid\}|\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b",
+    re.I,
+)
 _RE_TOKEN_WORD = re.compile(r"\b(token|jwt|session|apikey|api_key|secret)\b", re.I)
 _RE_AUTH_HEADER_WORDS = re.compile(r"\b(authorization|bearer|cookie|set-cookie|x-api-key|x-auth|x-session)\b", re.I)
 
@@ -121,45 +124,40 @@ def _host_is_allowed(host: str, allow_hosts: List[str], deny_hosts: List[str]) -
       - wildcard hosts: *.example.com (fnmatch)
 
     Behavior:
-      - If BOTH allow_hosts and deny_hosts are empty => scope is unset:
-          -> allow anything, tag scope_unset
       - Deny takes precedence
-      - If allow_hosts is empty (but deny_hosts not empty) => allow anything unless denylisted
-      - If allow_hosts exists => must match allow_hosts
+      - If allow_hosts is empty => scope is unset:
+          -> allow anything unless denylisted, tag scope_unset
+      - If allow_hosts exists => must match allow_hosts (else out_of_scope)
     Returns (allowed?, tags)
     """
     h = (host or "").strip().lower()
     tags: List[str] = []
 
-    if not h:
-      # no host, don't penalize, still show scope_unset if truly unset
-      if not allow_hosts and not deny_hosts:
-          tags.append("scope_unset")
-      return True, tags
-
-    # Scope not configured at all
-    if not allow_hosts and not deny_hosts:
+    scope_unset = not allow_hosts
+    if scope_unset:
         tags.append("scope_unset")
+
+    # No host? don't penalize; still expose scope_unset if applicable
+    if not h:
         return True, tags
 
-    # Deny takes precedence
+    # Deny takes precedence (even if scope unset)
     for pat in deny_hosts:
         if fnmatch.fnmatch(h, pat):
             tags.append("denylisted_host")
             return False, tags
 
-    # If no allowlist: everything allowed (deny already handled)
-    if not allow_hosts:
+    # No allowlist => can't classify out_of_scope
+    if scope_unset:
         return True, tags
 
-    # If allowlist exists: must match
+    # Allowlist exists => must match
     for pat in allow_hosts:
         if fnmatch.fnmatch(h, pat):
             return True, tags
 
     tags.append("out_of_scope")
     return False, tags
-
 
 
 def _is_third_party(host: str, allow_hosts: List[str]) -> bool:
@@ -177,10 +175,6 @@ def _is_third_party(host: str, allow_hosts: List[str]) -> bool:
 
 
 def _path_placeholder_tags(path_template: str) -> Tuple[int, List[str]]:
-    """
-    Adds score based on density of placeholders like {uuid}/{token}/{jwt}.
-    Returns (score_delta, tags)
-    """
     p = (path_template or "").lower()
     tags: List[str] = []
     score = 0
@@ -196,7 +190,6 @@ def _path_placeholder_tags(path_template: str) -> Tuple[int, List[str]]:
         score += min(18, 6 + 4 * tok_hits)
         tags.append("token_in_path")
 
-    # generic UUID-like even if template isn't normalized exactly
     if _RE_UUID_LIKE.search(p):
         score += 4
         tags.append("uuid_like")
@@ -205,12 +198,6 @@ def _path_placeholder_tags(path_template: str) -> Tuple[int, List[str]]:
 
 
 def _status_tags(status_codes: List[Any]) -> Tuple[int, List[str]]:
-    """
-    Status code signal:
-      - 401/403 => authz boundary hint (good triage)
-      - 5xx => interesting/unstable
-      - 3xx => redirect flows (sometimes interesting)
-    """
     tags: List[str] = []
     score = 0
 
@@ -249,17 +236,12 @@ def _asset_like_mime(mime: str) -> bool:
 
 
 def _confidence_from_evidence(tags: List[str]) -> int:
-    """
-    Light signal about how much evidence we have.
-    Not returned as a separate field (yet), but used to nudge the score.
-    """
     strong = {
         "writes", "destructive", "authz_boundary", "sensitive_path",
         "token_in_path", "id_in_path", "file_param", "redirect_param",
         "query_injection_param", "5xx_seen",
     }
-    c = sum(1 for t in tags if t in strong)
-    return c
+    return sum(1 for t in tags if t in strong)
 
 
 # --- scoring ---
@@ -270,12 +252,6 @@ def score_action(
     allow_hosts: Optional[List[str]] = None,
     deny_hosts: Optional[List[str]] = None,
 ) -> Tuple[int, List[str]]:
-    """
-    Pure heuristic score 0..100 for triage (NOT exploitation).
-    Adds tags explaining why it scored high/low.
-
-    allow_hosts / deny_hosts are optional and are meant to come from Project scope.
-    """
     tags: List[str] = []
     score = 0
 
@@ -294,23 +270,24 @@ def score_action(
     deny_hosts_n = _norm_hosts(deny_hosts)
 
     # --- scope awareness ---
-        # --- scope awareness ---
     allowed, scope_tags = _host_is_allowed(host, allow_hosts_n, deny_hosts_n)
     tags.extend(scope_tags)
 
-    # If scope isn't configured, don't punish endpoints (just label it)
-    # Optional tiny nudge:
-    # if "scope_unset" in tags:
-    #     score -= 2
+    # Extra hard-guard: if scope is unset, we should never report out_of_scope/third_party.
+    scope_unset = "scope_unset" in tags
 
-
-    if _is_third_party(host, allow_hosts_n):
+    if (not scope_unset) and _is_third_party(host, allow_hosts_n):
         tags.append("third_party")
 
     # De-emphasize out of scope / third-party noise (still visible)
-    if not allowed:
+    # IMPORTANT: don't penalize out_of_scope when scope is unset.
+    if (not allowed) and (not scope_unset):
         score -= 22
-    if "third_party" in tags:
+    if ("third_party" in tags) and (not scope_unset):
+        score -= 10
+
+    # If denylisted, keep it visible + slightly de-emphasize.
+    if ("denylisted_host" in tags):
         score -= 10
 
     # --- method weight ---
@@ -361,7 +338,7 @@ def score_action(
         score += 6
         tags.append("medium_resp")
 
-    # --- slow endpoints (heavy compute / upstream waits) ---
+    # --- slow endpoints ---
     if avg_time_ms >= 2000:
         score += 9
         tags.append("slow")
@@ -404,34 +381,26 @@ def score_action(
         tags.append("debug_param")
 
     # --- content-type nudges ---
-    # De-emphasize obvious assets
     if _asset_like_mime(mime):
         score -= 25
         tags.append("asset_like")
 
-    # JSON/XML endpoints usually more actionable than HTML
     if _likely_api_mime(mime):
         score += 3
         tags.append("api_like")
 
-    # HTML is noisy unless it has strong signals elsewhere
     if mime == "text/html":
         score -= 2
 
-    # --- frequency / “hot path” ---
-    # High count endpoints might be interesting but can also be telemetry noise.
-    # Small nudge only, and only if other signals exist.
+    # --- frequency ---
     if count >= 25:
         tags.append("high_frequency")
-        # If it's also api_like or has boundary signals, bump a bit.
         if "api_like" in tags or "authz_boundary" in tags or "writes" in tags:
             score += 3
         else:
             score += 1
 
-    # --- lightweight auth/header hints (if present in action dicts later) ---
-    # If actions include req/resp headers in the future, we can use them.
-    # For now, keep it safe: only act if keys exist.
+    # --- lightweight auth/header hints ---
     for hk in ("req_headers", "resp_headers"):
         hv = a.get(hk)
         if isinstance(hv, dict):
@@ -441,13 +410,11 @@ def score_action(
                 tags.append("auth_headers_present")
                 break
 
-    # token-ish words in path (extra hint beyond placeholders)
     if _RE_TOKEN_WORD.search(path):
         score += 2
         tags.append("token_word_in_path")
 
     # --- evidence-based nudge ---
-    # If we have multiple strong tags, push score a bit to separate the “real” stuff.
     conf = _confidence_from_evidence(tags)
     if conf >= 3:
         score += 3
@@ -455,7 +422,10 @@ def score_action(
     elif conf == 2:
         score += 1
 
-    # Clamp & dedupe
+    # Final hard-guard: if scope is unset, strip any accidental scope classifications.
+    if scope_unset:
+        tags = [t for t in tags if t not in ("out_of_scope", "third_party")]
+
     score = max(0, min(100, score))
     tags = sorted(set(tags))
     return score, tags
@@ -467,15 +437,9 @@ def attach_risk(
     allow_hosts: Optional[List[str]] = None,
     deny_hosts: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
-    """
-    Mutates action dicts by adding:
-      - risk_score
-      - risk_tags
-
-    Pass allow_hosts/deny_hosts from Project scope for better signal.
-    """
     for a in actions:
         s, tags = score_action(a, allow_hosts=allow_hosts, deny_hosts=deny_hosts)
         a["risk_score"] = s
         a["risk_tags"] = tags
     return actions
+# ============================================================

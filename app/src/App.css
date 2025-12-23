@@ -427,3 +427,96 @@ tr.ph-tr.selected{
 .ph-wrap.focus .ph-tableScroll{
   max-height: calc(100vh - 180px);
 }
+
+/* -----------------------------
+   Tag filter panel
+------------------------------ */
+
+.ph-btn-active{
+  border-color: rgba(11,102,255,.45);
+  box-shadow: var(--ring);
+  background: var(--accentSoft);
+}
+
+@media (prefers-color-scheme: dark){
+  .ph-btn-active{
+    border-color: rgba(90,162,255,.45);
+  }
+}
+
+/* Panel styling */
+.ph-tagPanel{
+  margin: 8px 0 10px;
+  padding: 10px;
+  border-radius: var(--radiusSm);
+  box-shadow: var(--shadow2);
+  border: 1px solid var(--border);
+  background: var(--panel);
+}
+
+/* Tag chips */
+.ph-tagOpt{
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,.65);
+  cursor: pointer;
+  user-select: none;
+  transition: background .12s ease, border-color .12s ease, transform .05s ease, opacity .12s ease;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+@media (prefers-color-scheme: dark){
+  .ph-tagOpt{
+    background: rgba(255,255,255,.03);
+  }
+}
+
+.ph-tagOpt:hover{
+  background: rgba(11,102,255,.06);
+  border-color: rgba(11,102,255,.20);
+}
+
+@media (prefers-color-scheme: dark){
+  .ph-tagOpt:hover{
+    background: rgba(90,162,255,.10);
+    border-color: rgba(90,162,255,.22);
+  }
+}
+
+.ph-tagOpt input[type="checkbox"]{
+  margin: 0;
+  accent-color: var(--accent);
+  transform: translateY(0.5px);
+}
+
+/* When unchecked (JSX adds .is-off), dim it */
+.ph-tagOpt.is-off{
+  opacity: .55;
+}
+
+/* Cap height if there are tons of tags */
+.ph-tagPanel .ph-row:last-child{
+  max-height: 180px;
+  overflow: auto;
+  padding-top: 6px;
+}
+
+/* Subtle scrollbar for tag panel */
+.ph-tagPanel .ph-row:last-child::-webkit-scrollbar{
+  width: 10px;
+  height: 10px;
+}
+.ph-tagPanel .ph-row:last-child::-webkit-scrollbar-thumb{
+  background: rgba(127,127,127,.25);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.ph-tagPanel .ph-row:last-child::-webkit-scrollbar-thumb:hover{
+  background: rgba(127,127,127,.35);
+}
