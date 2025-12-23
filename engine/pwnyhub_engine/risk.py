@@ -119,13 +119,27 @@ def _host_is_allowed(host: str, allow_hosts: List[str], deny_hosts: List[str]) -
     allow_hosts / deny_hosts support:
       - exact hosts: api.example.com
       - wildcard hosts: *.example.com (fnmatch)
-    If allow_hosts is empty => allow anything unless denylisted.
+
+    Behavior:
+      - If BOTH allow_hosts and deny_hosts are empty => scope is unset:
+          -> allow anything, tag scope_unset
+      - Deny takes precedence
+      - If allow_hosts is empty (but deny_hosts not empty) => allow anything unless denylisted
+      - If allow_hosts exists => must match allow_hosts
     Returns (allowed?, tags)
     """
     h = (host or "").strip().lower()
     tags: List[str] = []
 
     if not h:
+      # no host, don't penalize, still show scope_unset if truly unset
+      if not allow_hosts and not deny_hosts:
+          tags.append("scope_unset")
+      return True, tags
+
+    # Scope not configured at all
+    if not allow_hosts and not deny_hosts:
+        tags.append("scope_unset")
         return True, tags
 
     # Deny takes precedence
@@ -134,7 +148,7 @@ def _host_is_allowed(host: str, allow_hosts: List[str], deny_hosts: List[str]) -
             tags.append("denylisted_host")
             return False, tags
 
-    # If no allowlist: everything allowed
+    # If no allowlist: everything allowed (deny already handled)
     if not allow_hosts:
         return True, tags
 
@@ -145,6 +159,7 @@ def _host_is_allowed(host: str, allow_hosts: List[str], deny_hosts: List[str]) -
 
     tags.append("out_of_scope")
     return False, tags
+
 
 
 def _is_third_party(host: str, allow_hosts: List[str]) -> bool:
@@ -279,8 +294,15 @@ def score_action(
     deny_hosts_n = _norm_hosts(deny_hosts)
 
     # --- scope awareness ---
+        # --- scope awareness ---
     allowed, scope_tags = _host_is_allowed(host, allow_hosts_n, deny_hosts_n)
     tags.extend(scope_tags)
+
+    # If scope isn't configured, don't punish endpoints (just label it)
+    # Optional tiny nudge:
+    # if "scope_unset" in tags:
+    #     score -= 2
+
 
     if _is_third_party(host, allow_hosts_n):
         tags.append("third_party")

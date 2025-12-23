@@ -1233,7 +1233,9 @@ export default function App() {
                         {filteredActions.map((a) => {
                           const isSel = a.key === selectedActionKey;
                           const tags = Array.isArray(a.risk_tags) ? a.risk_tags : [];
-                          const miniTag = tags.includes("out_of_scope")
+                          const miniTag = tags.includes("scope_unset")
+                          ? "scope_unset"
+                          : tags.includes("out_of_scope")
                             ? "out_of_scope"
                             : tags.includes("third_party")
                               ? "third_party"
