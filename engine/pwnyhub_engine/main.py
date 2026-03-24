@@ -8,17 +8,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlparse
-
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import select
-
+from fastapi import HTTPException
+from pwnyhub_engine.modules.registry import ModuleRegistry
 from .actions import actions_to_json, build_actions
 from .db import Finding, HarEntry, Project, Run, get_session, init_db
 from .har_import import is_asset_mime, parse_har
 from .risk import attach_risk
 
 app = FastAPI(title="PwnyHub Engine", version="0.2.0")
+
+module_registry = ModuleRegistry()
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -49,6 +52,11 @@ _MODULE_CACHE: Dict[str, Any] = {
 def _startup() -> None:
     init_db()
     _refresh_modules_cache()
+
+@app.on_event("startup")
+def _discover_modules():
+    module_registry.discover()
+
 
 
 @app.get("/")

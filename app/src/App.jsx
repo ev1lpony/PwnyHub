@@ -294,10 +294,16 @@ export default function App() {
     if (!force && wizardOpen) return;
     const p = cfg.project;
 
-    const allowLines =
-      Array.isArray(p?.scope?.allow) ? p.scope.allow : Array.isArray(p?.scope_allow) ? p.scope_allow : [];
-    const denyLines =
-      Array.isArray(p?.scope?.deny) ? p.scope.deny : Array.isArray(p?.scope_deny) ? p.scope_deny : [];
+    const allowLines = Array.isArray(p?.scope?.allow)
+      ? p.scope.allow
+      : Array.isArray(p?.scope_allow)
+        ? p.scope_allow
+        : [];
+    const denyLines = Array.isArray(p?.scope?.deny)
+      ? p.scope.deny
+      : Array.isArray(p?.scope_deny)
+        ? p.scope_deny
+        : [];
 
     setWizAllowText(listToLines(allowLines));
     setWizDenyText(listToLines(denyLines));
@@ -452,67 +458,62 @@ export default function App() {
   }
 
   // Tag filter panel (with "Hide unchecked tags" toggle)
-const tagFilterPanel =
-  setupComplete && tagFilterOpen ? (
-    <div className="ph-card ph-tagPanel">
-      <div className="ph-row" style={{ alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <span className="ph-small" style={{ fontWeight: 900, opacity: 0.85 }}>
-          Tag filters
-        </span>
-        <span className="ph-small" style={{ opacity: 0.75 }}>
-          Uncheck to hide actions that contain that tag.
-        </span>
+  const tagFilterPanel =
+    setupComplete && tagFilterOpen ? (
+      <div className="ph-card ph-tagPanel">
+        <div className="ph-row" style={{ alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span className="ph-small" style={{ fontWeight: 900, opacity: 0.85 }}>
+            Tag filters
+          </span>
+          <span className="ph-small" style={{ opacity: 0.75 }}>
+            Uncheck to hide actions that contain that tag.
+          </span>
 
-        <span style={{ marginLeft: "auto", display: "inline-flex", gap: 8, flexWrap: "wrap" }}>
-          <button className="ph-btn" onClick={presetShowAllTags} disabled={!actions.length}>
-            Show all
-          </button>
-          <button className="ph-btn" onClick={presetHideNoiseTags} disabled={!actions.length}>
-            Hide noise
-          </button>
+          <span style={{ marginLeft: "auto", display: "inline-flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="ph-btn" onClick={presetShowAllTags} disabled={!actions.length}>
+              Show all
+            </button>
+            <button className="ph-btn" onClick={presetHideNoiseTags} disabled={!actions.length}>
+              Hide noise
+            </button>
 
-          <button
-            className={`ph-btn ${hideUncheckedTagsInPanel ? "ph-btn-active" : ""}`}
-            onClick={() => setHideUncheckedTagsInPanel((v) => !v)}
-            disabled={!actions.length}
-            title="Hide unchecked tags from this list (action filtering stays the same)"
-          >
-            {hideUncheckedTagsInPanel ? "Hide unchecked: ON" : "Hide unchecked: OFF"}
-          </button>
-        </span>
+            <button
+              className={`ph-btn ${hideUncheckedTagsInPanel ? "ph-btn-active" : ""}`}
+              onClick={() => setHideUncheckedTagsInPanel((v) => !v)}
+              disabled={!actions.length}
+              title="Hide unchecked tags from this list (action filtering stays the same)"
+            >
+              {hideUncheckedTagsInPanel ? "Hide unchecked: ON" : "Hide unchecked: OFF"}
+            </button>
+          </span>
+        </div>
+
+        {!tagOptions.length ? (
+          <div className="ph-small" style={{ opacity: 0.8, marginTop: 8 }}>
+            No risk tags available yet. Load actions with <strong>include risk</strong>.
+          </div>
+        ) : (
+          <div className="ph-row" style={{ marginTop: 8, alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+            {(hideUncheckedTagsInPanel ? tagOptions.filter(({ tag }) => !excludedTagSet.has(tag)) : tagOptions)
+              .slice(0, 80)
+              .map(({ tag, count }) => {
+                const show = !excludedTagSet.has(tag);
+                return (
+                  <label
+                    key={tag}
+                    className={`ph-tagOpt ${show ? "" : "is-off"}`}
+                    title={`Actions with tag: ${count}`}
+                  >
+                    <input type="checkbox" checked={show} onChange={(e) => setShowTag(tag, e.target.checked)} />
+                    <span className="ph-mono">{tag}</span>
+                    <span style={{ opacity: 0.65 }}>({count})</span>
+                  </label>
+                );
+              })}
+          </div>
+        )}
       </div>
-
-      {!tagOptions.length ? (
-        <div className="ph-small" style={{ opacity: 0.8, marginTop: 8 }}>
-          No risk tags available yet. Load actions with <strong>include risk</strong>.
-        </div>
-      ) : (
-        <div className="ph-row" style={{ marginTop: 8, alignItems: "center", flexWrap: "wrap", gap: 10 }}>
-          {(hideUncheckedTagsInPanel ? tagOptions.filter(({ tag }) => !excludedTagSet.has(tag)) : tagOptions)
-            .slice(0, 80)
-            .map(({ tag, count }) => {
-              const show = !excludedTagSet.has(tag);
-              return (
-                <label
-                  key={tag}
-                  className={`ph-tagOpt ${show ? "" : "is-off"}`}
-                  title={`Actions with tag: ${count}`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={show}
-                    onChange={(e) => setShowTag(tag, e.target.checked)}
-                  />
-                  <span className="ph-mono">{tag}</span>
-                  <span style={{ opacity: 0.65 }}>({count})</span>
-                </label>
-              );
-            })}
-        </div>
-      )}
-    </div>
-  ) : null;
-
+    ) : null;
 
   // Default ordering ("normal"):
   const defaultSort = useMemo(() => {
@@ -1364,7 +1365,12 @@ const tagFilterPanel =
 
             <span className="ph-small">
               URL:{" "}
-              <input className="ph-input" value={engineUrl} onChange={(e) => setEngineUrl(e.target.value)} style={{ width: 280 }} />
+              <input
+                className="ph-input"
+                value={engineUrl}
+                onChange={(e) => setEngineUrl(e.target.value)}
+                style={{ width: 280 }}
+              />
             </span>
 
             <button className="ph-btn" onClick={createDemoProject} disabled={!engineOk || busy}>
@@ -1388,7 +1394,8 @@ const tagFilterPanel =
               <option value="">Select project…</option>
               {projects.map((p) => (
                 <option key={p.id} value={String(p.id)}>
-                  {p.name} (id={p.id}){p.setup_complete === false ? " • setup" : ""}
+                  {p.name} (id={p.id})
+                  {p.setup_complete === false ? " • setup" : ""}
                 </option>
               ))}
             </select>
@@ -1462,7 +1469,12 @@ const tagFilterPanel =
               {busy ? "Working…" : "Import HAR"}
             </button>
 
-            <button className="ph-btn" onClick={() => refreshSummary()} disabled={!engineOk || !projectId || busy} title="Refresh summary">
+            <button
+              className="ph-btn"
+              onClick={() => refreshSummary()}
+              disabled={!engineOk || !projectId || busy}
+              title="Refresh summary"
+            >
               Refresh summary
             </button>
 
@@ -1743,22 +1755,41 @@ const tagFilterPanel =
                   ) : (
                     <>
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-                        <button className="ph-btn" onClick={() => copyToClipboard(selectedAction.key).then((ok) => setToast(ok ? "Copied key" : "Copy failed"))}>
+                        <button
+                          className="ph-btn"
+                          onClick={() => copyToClipboard(selectedAction.key).then((ok) => setToast(ok ? "Copied key" : "Copy failed"))}
+                        >
                           Copy key
                         </button>
-                        <button className="ph-btn" disabled={!selectedAction.host} onClick={() => copyToClipboard(selectedAction.host || "").then((ok) => setToast(ok ? "Copied host" : "Copy failed"))}>
+                        <button
+                          className="ph-btn"
+                          disabled={!selectedAction.host}
+                          onClick={() => copyToClipboard(selectedAction.host || "").then((ok) => setToast(ok ? "Copied host" : "Copy failed"))}
+                        >
                           Copy host
                         </button>
-                        <button className="ph-btn" disabled={!selectedAction.path_template} onClick={() => copyToClipboard(selectedAction.path_template || "").then((ok) => setToast(ok ? "Copied path" : "Copy failed"))}>
+                        <button
+                          className="ph-btn"
+                          disabled={!selectedAction.path_template}
+                          onClick={() => copyToClipboard(selectedAction.path_template || "").then((ok) => setToast(ok ? "Copied path" : "Copy failed"))}
+                        >
                           Copy path
                         </button>
-                        <button className="ph-btn" disabled={!selectedAction.sample_urls?.length} onClick={() => copyToClipboard(selectedAction.sample_urls?.[0] || "").then((ok) => setToast(ok ? "Copied URL" : "Copy failed"))}>
+                        <button
+                          className="ph-btn"
+                          disabled={!selectedAction.sample_urls?.length}
+                          onClick={() => copyToClipboard(selectedAction.sample_urls?.[0] || "").then((ok) => setToast(ok ? "Copied URL" : "Copy failed"))}
+                        >
                           Copy URL
                         </button>
-                        <button className="ph-btn" disabled={!selectedAction.sample_urls?.length} onClick={() => {
-                          const u = selectedAction.sample_urls?.[0] || "";
-                          if (u) window.open(u, "_blank", "noopener,noreferrer");
-                        }}>
+                        <button
+                          className="ph-btn"
+                          disabled={!selectedAction.sample_urls?.length}
+                          onClick={() => {
+                            const u = selectedAction.sample_urls?.[0] || "";
+                            if (u) window.open(u, "_blank", "noopener,noreferrer");
+                          }}
+                        >
                           Open URL
                         </button>
                       </div>
