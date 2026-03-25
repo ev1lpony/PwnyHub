@@ -22,6 +22,18 @@ app = FastAPI(title="PwnyHub Engine", version="0.2.0")
 
 module_registry = ModuleRegistry()
 
+# -----------------------------
+# ML Risk Configuration
+# -----------------------------
+ML_RISK_ENABLED: bool = False                    # Change to True when you have a model
+ML_MODEL_PATH: Optional[str] = None              # e.g. "models/risk_model.joblib" later
+
+# You can also control it via environment variable
+if os.getenv("PWNYHUB_ML_RISK_ENABLED", "").strip().lower() in ("1", "true", "yes", "on"):
+    ML_RISK_ENABLED = True
+if os.getenv("PWNYHUB_ML_MODEL_PATH"):
+    ML_MODEL_PATH = os.getenv("PWNYHUB_ML_MODEL_PATH")
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -67,6 +79,34 @@ def root():
 @app.get("/health")
 def health():
     return {"ok": True}
+
+
+# -----------------------------
+# ML Settings endpoints
+# -----------------------------
+@app.get("/settings/ml")
+def get_ml_settings():
+    return {
+        "ml_risk_enabled": ML_RISK_ENABLED,
+        "model_path": ML_MODEL_PATH,
+        "model_loaded": False,
+    }
+
+
+@app.patch("/settings/ml")
+def update_ml_settings(payload: Dict[str, Any] = Body(...)):
+    global ML_RISK_ENABLED, ML_MODEL_PATH
+    
+    if "enabled" in payload:
+        ML_RISK_ENABLED = bool(payload["enabled"])
+    
+    if "model_path" in payload:
+        ML_MODEL_PATH = payload.get("model_path") or None
+    
+    return {
+        "ml_risk_enabled": ML_RISK_ENABLED,
+        "model_path": ML_MODEL_PATH
+    }
 
 
 # -----------------------------
@@ -224,7 +264,13 @@ def _compute_actions_for_project(project_id: int, *, include_risk: bool) -> Dict
     out = actions_to_json(acts)
 
     if include_risk:
-        out = attach_risk(out, allow_hosts=allow_hosts, deny_hosts=deny_hosts)
+        out = attach_risk(
+            out,
+            allow_hosts=allow_hosts,
+            deny_hosts=deny_hosts,
+            use_ml=ML_RISK_ENABLED,
+            model_path=ML_MODEL_PATH
+        )
 
     return {
         "actions": out,
@@ -741,6 +787,7 @@ def actions(
         "project_id": project_id,
         "actions": data["actions"],
         "risk_included": data["risk_included"],
+        "ml_risk_enabled": ML_RISK_ENABLED,
         "scope": {
             "allow_hosts": data["allow_hosts"],
             "deny_hosts": data["deny_hosts"],

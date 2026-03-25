@@ -436,10 +436,53 @@ def attach_risk(
     *,
     allow_hosts: Optional[List[str]] = None,
     deny_hosts: Optional[List[str]] = None,
+    use_ml: bool = False,           # ← NEW
+    model_path: Optional[str] = None  # ← NEW
 ) -> List[Dict[str, Any]]:
+    """
+    Attach risk scores to a list of actions.
+    Now supports optional ML boost.
+    """
     for a in actions:
-        s, tags = score_action(a, allow_hosts=allow_hosts, deny_hosts=deny_hosts)
-        a["risk_score"] = s
-        a["risk_tags"] = tags
+        # Use the new ML-aware function
+        scored = calculate_risk_with_ml(
+            a, 
+            use_ml=use_ml, 
+            model_path=model_path
+        )
+        # Update the original action dict (or you can choose to return copies)
+        a["risk_score"] = scored["risk_score"]
+        a["risk_tags"] = scored.get("risk_tags", [])
+        
+        # Optional: add ml_confidence if present
+        if "ml_confidence" in scored:
+            a["ml_confidence"] = scored["ml_confidence"]
+    
     return actions
+# =============================================
+# ML Integration (Hybrid Scoring)
+# =============================================
+
+def calculate_risk(action: dict) -> dict:
+    """Pure heuristic risk scoring."""
+    s, tags = score_action(action)
+    action = action.copy()           # safe copy
+    action["risk_score"] = s
+    action["risk_tags"] = tags
+    return action
+
+
+def calculate_risk_with_ml(
+    action: dict, 
+    use_ml: bool = False, 
+    model_path: Optional[str] = None
+) -> dict:
+    """Main entry point. use_ml=True enables hybrid ML boost."""
+    if use_ml:
+        # Lazy import to prevent circular import hell
+        from .ml.risk_scorer import get_risk_scorer
+        scorer = get_risk_scorer(model_path)
+        return scorer.score(action)
+    
+    return calculate_risk(action)
 # ============================================================
