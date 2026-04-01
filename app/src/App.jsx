@@ -227,6 +227,9 @@ export default function App() {
     saved.autoLoadOnProjectSelect !== false
   );
 
+  // ML Risk Scoring
+  const [mlEnabled, setMlEnabled] = useState(saved.mlEnabled || false);
+
   // Filters
   const [fHost, setFHost] = useState(saved.fHost || "");
   const [fMethod, setFMethod] = useState(saved.fMethod || "");
@@ -339,6 +342,7 @@ export default function App() {
       tagFilterOpen,
       hideUncheckedTagsInPanel,
       excludedTags,
+      mlEnabled,
     };
     localStorage.setItem(LS_KEY, JSON.stringify(payload));
   }, [
@@ -363,6 +367,7 @@ export default function App() {
     tagFilterOpen,
     hideUncheckedTagsInPanel,
     excludedTags,
+    mlEnabled,
   ]);
 
   // Toast auto-hide
@@ -844,6 +849,19 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engineOk]);
 
+  // Load ML setting from backend when engine is ready
+  useEffect(() => {
+    if (!engineOk) return;
+    (async () => {
+      try {
+        const data = await jfetch(`${engineUrl}/settings/ml`);
+        setMlEnabled(!!data.ml_risk_enabled);
+      } catch (e) {
+        console.warn("Could not load ML settings", e);
+      }
+    })();
+  }, [engineOk, engineUrl]);
+
   // --- fetch selected project config + auto-open wizard if not setup_complete ---
   useEffect(() => {
     if (!engineOk || !projectId) {
@@ -912,6 +930,27 @@ export default function App() {
       setMsg(`Failed to load actions: ${String(e?.message || e)}`);
     } finally {
       setBusyActions(false);
+    }
+  }
+
+  // Toggle ML Risk Scoring
+  async function toggleMlRisk() {
+    const newVal = !mlEnabled;
+    try {
+      await jfetch(`${engineUrl}/settings/ml`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: newVal }),
+      });
+      setMlEnabled(newVal);
+      setToast(newVal ? "ML Risk Scoring Enabled" : "ML Risk Scoring Disabled");
+
+      // Refresh actions so ML scores take effect
+      if (projectId && setupComplete) {
+        await loadActions();
+      }
+    } catch (e) {
+      setToast(`Failed to toggle ML: ${String(e?.message || e)}`);
     }
   }
 
@@ -1460,6 +1499,17 @@ export default function App() {
               include risk
             </label>
 
+            <label className="ph-small" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <input
+                type="checkbox"
+                checked={mlEnabled}
+                onChange={toggleMlRisk}
+                disabled={!engineOk || !setupComplete}
+              />
+              ML Risk Scoring
+              {mlEnabled && <span style={pillStyle("#1f2c1f", "#c9ffd0")}>ON</span>}
+            </label>
+
             <button
               className="ph-btn"
               onClick={importHar}
@@ -1813,6 +1863,16 @@ export default function App() {
                           {Array.isArray(selectedAction.risk_tags) && selectedAction.risk_tags.length ? `(${selectedAction.risk_tags.join(", ")})` : ""}
                         </div>
                       ) : null}
+
+                      {selectedAction?.ml_confidence !== undefined && (
+                        <div className="ph-kv">
+                          <strong>ML Confidence:</strong>{" "}
+                          {(selectedAction.ml_confidence * 100).toFixed(0)}%
+                          {selectedAction.risk_tags?.includes("ml-boosted") && (
+                            <span style={pillStyle("#1f2c1f", "#c9ffd0")}>ml-boosted</span>
+                          )}
+                        </div>
+                      )}
 
                       {Array.isArray(selectedAction.sample_urls) && selectedAction.sample_urls.length ? (
                         <>
