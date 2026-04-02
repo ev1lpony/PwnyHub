@@ -230,6 +230,26 @@ export default function App() {
   // ML Risk Scoring
   const [mlEnabled, setMlEnabled] = useState(saved.mlEnabled || false);
 
+  // Modules / Runs / Findings
+  const [modules, setModules] = useState([]);
+  const [modulesBusy, setModulesBusy] = useState(false);
+  const [runs, setRuns] = useState([]);
+  const [runsBusy, setRunsBusy] = useState(false);
+  const [runFindings, setRunFindings] = useState([]);
+  const [findingsBusy, setFindingsBusy] = useState(false);
+  const [selectedModuleId, setSelectedModuleId] = useState(saved.selectedModuleId || "risk_digest");
+  const [selectedRunId, setSelectedRunId] = useState(saved.selectedRunId || "");
+  const [moduleRunBusy, setModuleRunBusy] = useState(false);
+  const [moduleMinRisk, setModuleMinRisk] = useState(
+    Number.isFinite(saved.moduleMinRisk) ? saved.moduleMinRisk : 70
+  );
+
+  // Sources / Ingest
+  const [sources, setSources] = useState([]);
+  const [sourcesBusy, setSourcesBusy] = useState(false);
+  const [selectedSourceId, setSelectedSourceId] = useState(saved.selectedSourceId || "");
+  const [sourceName, setSourceName] = useState(saved.sourceName || "");
+
   // Filters
   const [fHost, setFHost] = useState(saved.fHost || "");
   const [fMethod, setFMethod] = useState(saved.fMethod || "");
@@ -343,6 +363,11 @@ export default function App() {
       hideUncheckedTagsInPanel,
       excludedTags,
       mlEnabled,
+      selectedModuleId,
+      selectedRunId,
+      moduleMinRisk,
+      selectedSourceId,
+      sourceName,
     };
     localStorage.setItem(LS_KEY, JSON.stringify(payload));
   }, [
@@ -368,6 +393,11 @@ export default function App() {
     hideUncheckedTagsInPanel,
     excludedTags,
     mlEnabled,
+    selectedModuleId,
+    selectedRunId,
+    moduleMinRisk,
+    selectedSourceId,
+    sourceName,
   ]);
 
   // Toast auto-hide
@@ -384,6 +414,22 @@ export default function App() {
   const hasRisk = useMemo(() => {
     return actions.some((a) => a && a.risk_score !== undefined && a.risk_score !== null);
   }, [actions]);
+
+  const selectedModule = useMemo(() => {
+    return modules.find((m) => String(m.id) === String(selectedModuleId)) || null;
+  }, [modules, selectedModuleId]);
+
+  const selectedRun = useMemo(() => {
+    return runs.find((r) => String(r.id) === String(selectedRunId)) || null;
+  }, [runs, selectedRunId]);
+
+  const selectedRunSummary = useMemo(() => {
+    return safeJsonParse(selectedRun?.summary_json || "{}") || {};
+  }, [selectedRun]);
+
+  const selectedSource = useMemo(() => {
+    return sources.find((s) => String(s.id) === String(selectedSourceId)) || null;
+  }, [sources, selectedSourceId]);
 
   // Build tag options from current actions (counts = how many actions contain that tag)
   const tagStats = useMemo(() => {
@@ -862,6 +908,42 @@ export default function App() {
     })();
   }, [engineOk, engineUrl]);
 
+  useEffect(() => {
+    if (!engineOk) return;
+    loadModules();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engineOk, engineUrl]);
+
+  useEffect(() => {
+    if (!engineOk || !projectId || !setupComplete) {
+      setRuns([]);
+      setSelectedRunId("");
+      setRunFindings([]);
+      return;
+    }
+    loadRuns(projectId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engineOk, projectId, setupComplete]);
+
+  useEffect(() => {
+    if (!engineOk || !projectId || !setupComplete) {
+      setSources([]);
+      setSelectedSourceId("");
+      return;
+    }
+    loadSources(projectId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engineOk, projectId, setupComplete]);
+
+  useEffect(() => {
+    if (!selectedRunId) {
+      setRunFindings([]);
+      return;
+    }
+    loadRunFindings(selectedRunId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRunId]);
+
   // --- fetch selected project config + auto-open wizard if not setup_complete ---
   useEffect(() => {
     if (!engineOk || !projectId) {
@@ -933,6 +1015,123 @@ export default function App() {
     }
   }
 
+  async function loadModules() {
+    if (!engineOk) return;
+    setModulesBusy(true);
+    try {
+      const data = await jfetch(`${engineUrl}/modules`);
+      const list = Array.isArray(data?.modules) ? data.modules : [];
+      setModules(list);
+      setSelectedModuleId((prev) => {
+        if (prev && list.some((m) => String(m.id) === String(prev))) return prev;
+        return list[0]?.id || "";
+      });
+    } catch (e) {
+      setMsg(`Failed to load modules: ${String(e?.message || e)}`);
+    } finally {
+      setModulesBusy(false);
+    }
+  }
+
+  async function loadRuns(pid) {
+    const p = pid || projectId;
+    if (!p) return;
+    setRunsBusy(true);
+    try {
+      const data = await jfetch(`${engineUrl}/runs?project_id=${encodeURIComponent(p)}`);
+      const list = Array.isArray(data?.runs) ? data.runs : [];
+      setRuns(list);
+      setSelectedRunId((prev) => {
+        if (prev && list.some((r) => String(r.id) === String(prev))) return prev;
+        return list[0]?.id ? String(list[0].id) : "";
+      });
+    } catch (e) {
+      setMsg(`Failed to load runs: ${String(e?.message || e)}`);
+    } finally {
+      setRunsBusy(false);
+    }
+  }
+
+  async function loadSources(pid) {
+    const p = pid || projectId;
+    if (!p) return;
+    setSourcesBusy(true);
+    try {
+      const data = await jfetch(`${engineUrl}/sources?project_id=${encodeURIComponent(p)}`);
+      const list = Array.isArray(data?.sources) ? data.sources : [];
+      setSources(list);
+      setSelectedSourceId((prev) => {
+        if (prev && list.some((s) => String(s.id) === String(prev))) return prev;
+        return list[0]?.id ? String(list[0].id) : "";
+      });
+    } catch (e) {
+      setMsg(`Failed to load sources: ${String(e?.message || e)}`);
+    } finally {
+      setSourcesBusy(false);
+    }
+  }
+
+  async function loadRunFindings(runId) {
+    const rid = runId || selectedRunId;
+    if (!rid) {
+      setRunFindings([]);
+      return;
+    }
+    setFindingsBusy(true);
+    try {
+      const data = await jfetch(`${engineUrl}/runs/${encodeURIComponent(rid)}/findings`);
+      const list = Array.isArray(data?.findings) ? data.findings : [];
+      setRunFindings(list);
+    } catch (e) {
+      setMsg(`Failed to load findings: ${String(e?.message || e)}`);
+    } finally {
+      setFindingsBusy(false);
+    }
+  }
+
+  async function runSelectedModule() {
+    if (!engineOk) return setToast("Engine down");
+    if (!projectId) return setToast("Pick project");
+    if (!setupComplete) {
+      setToast("Setup required");
+      setWizardOpen(true);
+      return;
+    }
+    if (!selectedModuleId) return setToast("Pick module");
+
+    const params =
+      selectedModuleId === "risk_digest"
+        ? { min_risk: Math.max(0, Math.min(100, Number(moduleMinRisk) || 70)) }
+        : {};
+
+    setModuleRunBusy(true);
+    try {
+      const data = await jfetch(`${engineUrl}/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project_id: Number(projectId),
+          module_id: selectedModuleId,
+          params,
+        }),
+      });
+
+      const newRunId = String(data?.run_id || "");
+      setToast("Module ran");
+      setMsg(`Module ${selectedModuleId} finished.`);
+      await loadRuns(projectId);
+      if (newRunId) {
+        setSelectedRunId(newRunId);
+        await loadRunFindings(newRunId);
+      }
+    } catch (e) {
+      setMsg(`Module run failed: ${String(e?.message || e)}`);
+      setToast("Module failed");
+    } finally {
+      setModuleRunBusy(false);
+    }
+  }
+
   // Toggle ML Risk Scoring
   async function toggleMlRisk() {
     const newVal = !mlEnabled;
@@ -980,6 +1179,7 @@ export default function App() {
       if (pid && autoLoadOnProjectSelect) {
         await refreshSummary(pid);
         await loadActions(pid);
+        await loadSources(pid);
       }
     } catch (e) {
       setMsg(`Create demo project failed: ${String(e?.message || e)}`);
@@ -1005,6 +1205,7 @@ export default function App() {
         fd.append("project_id", projectId);
         fd.append(fieldName, file);
         fd.append("include_assets", includeAssets ? "true" : "false");
+        if (sourceName.trim()) fd.append("source_name", sourceName.trim());
         return jfetch(`${engineUrl}/import/har`, { method: "POST", body: fd });
       };
 
@@ -1022,6 +1223,7 @@ export default function App() {
       setMsg("Imported HAR. Refreshing summary + actions...");
       await refreshSummary(projectId);
       await loadActions(projectId);
+      await loadSources(projectId);
       setToast("Imported");
     } catch (e) {
       setMsg(`Import failed: ${String(e?.message || e)}`);
@@ -1044,6 +1246,7 @@ export default function App() {
         setSelectedActionKey("");
         await refreshSummary(projectId);
         await loadActions(projectId);
+        await loadSources(projectId);
       } catch (e) {
         setMsg(String(e?.message || e));
       }
@@ -1100,6 +1303,30 @@ export default function App() {
     const mod = isMac() ? "⌘" : "Ctrl";
     return `${mod}+K or / = search · ↑/↓ select · Enter details · c copy key · u copy url · o open url · f focus · e export`;
   }, []);
+
+  function runStatusStyle(status) {
+    const s = String(status || "").toLowerCase();
+    if (s === "done") return pillStyle("#1f2c1f", "#c9ffd0");
+    if (s === "running") return pillStyle("#1c2430", "#cfe0ff");
+    if (s === "failed") return pillStyle("#3b1f1f", "#ffd2d2");
+    return pillStyle("#222", "#eee");
+  }
+
+  function severityStyle(sev) {
+    const s = String(sev || "").toLowerCase();
+    if (s === "high") return pillStyle("#4a1515", "#ffd6d6");
+    if (s === "med") return pillStyle("#4a3515", "#ffe7c2");
+    if (s === "low") return pillStyle("#1f2c1f", "#c9ffd0");
+    return pillStyle("#1c2430", "#cfe0ff");
+  }
+
+  function sourceStatusStyle(status) {
+    const s = String(status || "").toLowerCase();
+    if (s === "done") return pillStyle("#1f2c1f", "#c9ffd0");
+    if (s === "running") return pillStyle("#1c2430", "#cfe0ff");
+    if (s === "failed") return pillStyle("#3b1f1f", "#ffd2d2");
+    return pillStyle("#222", "#eee");
+  }
 
   function exportActions(list, label = "actions") {
     const payload = JSON.stringify(list || [], null, 2);
@@ -1191,6 +1418,7 @@ export default function App() {
       if (autoLoadOnProjectSelect) {
         await refreshSummary(projectId);
         await loadActions(projectId);
+        await loadSources(projectId);
       }
     } catch (e) {
       setWizardErr(`Save failed: ${String(e?.message || e)}`);
@@ -1425,6 +1653,8 @@ export default function App() {
                 setSummary(null);
                 setActions([]);
                 setSelectedActionKey("");
+                setSelectedRunId("");
+                setSelectedSourceId("");
                 setMsg("");
               }}
               disabled={!engineOk}
@@ -1475,6 +1705,16 @@ export default function App() {
               onChange={(e) => setFile(e.target.files?.[0] || null)}
               disabled={!engineOk || !setupComplete}
               title={!setupComplete ? "Complete setup first" : ""}
+            />
+
+            <input
+              className="ph-input"
+              value={sourceName}
+              onChange={(e) => setSourceName(e.target.value)}
+              placeholder="source name (optional)"
+              style={{ width: 210 }}
+              disabled={!engineOk || !setupComplete}
+              title={!setupComplete ? "Complete setup first" : "Friendly label for this import source"}
             />
 
             <label className="ph-small" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
@@ -1585,6 +1825,288 @@ export default function App() {
               ) : null}
             </div>
           ) : null}
+
+          {/* Sources / Ingest */}
+          <div style={{ marginBottom: 18 }}>
+            <div className="ph-h2" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              Sources / Ingest
+              <span style={pillStyle("#1c2430", "#cfe0ff")}>sources: {sources.length}</span>
+
+              <span style={{ marginLeft: "auto", display: "inline-flex", gap: 8, flexWrap: "wrap" }}>
+                <button className="ph-btn" onClick={() => loadSources()} disabled={!engineOk || !projectId || sourcesBusy || !setupComplete}>
+                  {sourcesBusy ? "Loading sources…" : "Refresh sources"}
+                </button>
+              </span>
+            </div>
+
+            {!setupComplete ? (
+              <div className="ph-small">Finish project setup first, then you can inspect project sources.</div>
+            ) : (
+              <div className="ph-grid">
+                <div className="ph-tableWrap">
+                  <div className="ph-card" style={{ padding: 12 }}>
+                    <div className="ph-h2" style={{ marginBottom: 8 }}>Project sources</div>
+                    {!sources.length ? (
+                      <div className="ph-small">No sources yet for this project. Import a HAR to create the first source.</div>
+                    ) : (
+                      <div style={{ display: "grid", gap: 8 }}>
+                        {sources.slice(0, 20).map((s) => {
+                          const isSel = String(s.id) === String(selectedSourceId);
+                          return (
+                            <button
+                              key={s.id}
+                              className="ph-btn"
+                              onClick={() => setSelectedSourceId(String(s.id))}
+                              style={{
+                                justifyContent: "flex-start",
+                                textAlign: "left",
+                                padding: 10,
+                                border: isSel ? "1px solid rgba(120,180,255,0.8)" : undefined,
+                              }}
+                            >
+                              <span className="ph-row" style={{ width: "100%", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                <span className="ph-mono">#{s.id}</span>
+                                <span style={sourceStatusStyle(s.status)}>{s.status || "unknown"}</span>
+                                <span style={pillStyle("#222", "#eee")}>{s.kind || "source"}</span>
+                                <span style={{ fontWeight: 800 }}>{s.name || "(unnamed source)"}</span>
+                                <span className="ph-small" style={{ opacity: 0.75 }}>
+                                  entries: {fmtInt(s.entry_count)}
+                                </span>
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="right">
+                  <div className="ph-card" style={{ padding: 12 }}>
+                    <div className="ph-h2" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                      Source details
+                      {selectedSource ? <span style={sourceStatusStyle(selectedSource.status)}>{selectedSource.status || "unknown"}</span> : null}
+                    </div>
+
+                    {!selectedSource ? (
+                      <div className="ph-small">Select a source to inspect its ingest details.</div>
+                    ) : (
+                      <>
+                        <div className="ph-kv" style={{ marginTop: 10 }}><strong>Source ID:</strong> <span className="ph-mono">{selectedSource.id}</span></div>
+                        <div className="ph-kv"><strong>Name:</strong> {selectedSource.name || "—"}</div>
+                        <div className="ph-kv"><strong>Kind:</strong> <span className="ph-mono">{selectedSource.kind || "—"}</span></div>
+                        <div className="ph-kv"><strong>Entries:</strong> {fmtInt(selectedSource.entry_count)}</div>
+                        <div className="ph-kv"><strong>Created:</strong> {selectedSource.created_at || "—"}</div>
+                        <div className="ph-kv"><strong>Finished:</strong> {selectedSource.finished_at || "—"}</div>
+
+                        {selectedSource.error ? (
+                          <div className="ph-err" style={{ marginTop: 10 }}>
+                            <div style={{ fontWeight: 900, marginBottom: 6 }}>Source error</div>
+                            <div style={{ whiteSpace: "pre-wrap" }}>{selectedSource.error}</div>
+                          </div>
+                        ) : null}
+
+                        <div className="ph-h2" style={{ marginTop: 14 }}>Metadata</div>
+                        <pre className="ph-mono" style={{ whiteSpace: "pre-wrap", overflowX: "auto", fontSize: 12 }}>
+                          {safePrettyJson(selectedSource.metadata || {})}
+                        </pre>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Modules / Runs / Findings */}
+          <div style={{ marginBottom: 18 }}>
+            <div className="ph-h2" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              Modules & Runs
+              <span style={pillStyle("#1c2430", "#cfe0ff")}>modules: {modules.length}</span>
+              <span style={pillStyle("#1c2430", "#cfe0ff")}>runs: {runs.length}</span>
+
+              <span style={{ marginLeft: "auto", display: "inline-flex", gap: 8, flexWrap: "wrap" }}>
+                <button className="ph-btn" onClick={() => loadModules()} disabled={!engineOk || modulesBusy}>
+                  {modulesBusy ? "Loading modules…" : "Refresh modules"}
+                </button>
+                <button className="ph-btn" onClick={() => loadRuns()} disabled={!engineOk || !projectId || runsBusy || !setupComplete}>
+                  {runsBusy ? "Loading runs…" : "Refresh runs"}
+                </button>
+              </span>
+            </div>
+
+            {!setupComplete ? (
+              <div className="ph-small">Finish project setup first, then you can run modules.</div>
+            ) : (
+              <div className="ph-grid">
+                <div className="ph-tableWrap">
+                  <div className="ph-card" style={{ padding: 12 }}>
+                    <div className="ph-row" style={{ alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                      <select
+                        className="ph-select"
+                        value={selectedModuleId}
+                        onChange={(e) => setSelectedModuleId(e.target.value)}
+                        disabled={!modules.length || modulesBusy}
+                      >
+                        <option value="">Select module…</option>
+                        {modules.map((m) => (
+                          <option key={m.id} value={String(m.id)}>
+                            {m.name || m.id}
+                          </option>
+                        ))}
+                      </select>
+
+                      {selectedModuleId === "risk_digest" ? (
+                        <span className="ph-small" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                          min risk:
+                          <input
+                            className="ph-input"
+                            style={{ width: 88 }}
+                            value={String(moduleMinRisk)}
+                            onChange={(e) => setModuleMinRisk(Math.max(0, Math.min(100, parseInt(e.target.value || "0", 10) || 0)))}
+                            inputMode="numeric"
+                          />
+                        </span>
+                      ) : null}
+
+                      <button
+                        className="ph-btn"
+                        onClick={runSelectedModule}
+                        disabled={!engineOk || !projectId || !selectedModuleId || moduleRunBusy || !setupComplete}
+                      >
+                        {moduleRunBusy ? "Running…" : "Run module"}
+                      </button>
+                    </div>
+
+                    {selectedModule ? (
+                      <div style={{ marginTop: 12 }}>
+                        <div className="ph-row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+                          <span style={pillStyle("#1c2430", "#cfe0ff")}>{selectedModule.id}</span>
+                          <span style={pillStyle("#222", "#eee")}>{selectedModule.kind || "module"}</span>
+                          {Array.isArray(selectedModule.targets)
+                            ? selectedModule.targets.map((t) => (
+                                <span key={t} style={pillStyle("#1f2230", "#cfd7ff")}>{t}</span>
+                              ))
+                            : null}
+                        </div>
+                        <div className="ph-small" style={{ opacity: 0.9 }}>
+                          {selectedModule.description || "No description."}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="ph-small" style={{ marginTop: 12 }}>Select a module to inspect and run it.</div>
+                    )}
+                  </div>
+
+                  <div className="ph-card" style={{ padding: 12, marginTop: 12 }}>
+                    <div className="ph-h2" style={{ marginBottom: 8 }}>Recent runs</div>
+                    {!runs.length ? (
+                      <div className="ph-small">No runs yet for this project.</div>
+                    ) : (
+                      <div style={{ display: "grid", gap: 8 }}>
+                        {runs.slice(0, 12).map((r) => {
+                          const isSel = String(r.id) === String(selectedRunId);
+                          const summaryObj = safeJsonParse(r.summary_json || "{}") || {};
+                          const findingsCreated = Number(summaryObj?.findings_created || 0);
+                          return (
+                            <button
+                              key={r.id}
+                              className="ph-btn"
+                              onClick={() => setSelectedRunId(String(r.id))}
+                              style={{
+                                justifyContent: "flex-start",
+                                textAlign: "left",
+                                padding: 10,
+                                border: isSel ? "1px solid rgba(120,180,255,0.8)" : undefined,
+                              }}
+                            >
+                              <span className="ph-row" style={{ width: "100%", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                <span className="ph-mono">#{r.id}</span>
+                                <span style={runStatusStyle(r.status)}>{r.status || "unknown"}</span>
+                                <span style={pillStyle("#222", "#eee")}>{r.module_id}</span>
+                                <span className="ph-small" style={{ opacity: 0.75 }}>
+                                  findings: {findingsCreated}
+                                </span>
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="right">
+                  <div className="ph-card" style={{ padding: 12 }}>
+                    <div className="ph-h2" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                      Run details
+                      {selectedRun ? <span style={runStatusStyle(selectedRun.status)}>{selectedRun.status || "unknown"}</span> : null}
+                    </div>
+
+                    {!selectedRun ? (
+                      <div className="ph-small">Select a run to inspect its summary and findings.</div>
+                    ) : (
+                      <>
+                        <div className="ph-kv" style={{ marginTop: 10 }}><strong>Run ID:</strong> <span className="ph-mono">{selectedRun.id}</span></div>
+                        <div className="ph-kv"><strong>Module:</strong> <span className="ph-mono">{selectedRun.module_id}</span></div>
+                        <div className="ph-kv"><strong>Created:</strong> {selectedRun.created_at || "—"}</div>
+                        <div className="ph-kv"><strong>Finished:</strong> {selectedRun.finished_at || "—"}</div>
+
+                        {selectedRun.error ? (
+                          <div className="ph-err" style={{ marginTop: 10 }}>
+                            <div style={{ fontWeight: 900, marginBottom: 6 }}>Run error</div>
+                            <div style={{ whiteSpace: "pre-wrap" }}>{selectedRun.error}</div>
+                          </div>
+                        ) : null}
+
+                        <div className="ph-h2" style={{ marginTop: 14 }}>Summary</div>
+                        <pre className="ph-mono" style={{ whiteSpace: "pre-wrap", overflowX: "auto", fontSize: 12 }}>
+                          {safePrettyJson(selectedRunSummary)}
+                        </pre>
+
+                        <div className="ph-h2" style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 8 }}>
+                          Findings
+                          <span style={pillStyle("#1c2430", "#cfe0ff")}>{runFindings.length}</span>
+                        </div>
+
+                        {findingsBusy ? (
+                          <div className="ph-small">Loading findings…</div>
+                        ) : !runFindings.length ? (
+                          <div className="ph-small">No findings for this run.</div>
+                        ) : (
+                          <div style={{ display: "grid", gap: 10, marginTop: 8 }}>
+                            {runFindings.slice(0, 20).map((f) => (
+                              <div key={f.id} className="ph-card" style={{ padding: 10 }}>
+                                <div className="ph-row" style={{ alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                  <span style={severityStyle(f.severity)}>{f.severity || "info"}</span>
+                                  <span className="ph-mono">#{f.id}</span>
+                                  <span style={pillStyle("#222", "#eee")}>{f.module_id}</span>
+                                </div>
+                                <div style={{ fontWeight: 800, marginTop: 8 }}>{f.title || "(untitled finding)"}</div>
+                                {f.description ? (
+                                  <div className="ph-small" style={{ whiteSpace: "pre-wrap", marginTop: 6 }}>
+                                    {f.description}
+                                  </div>
+                                ) : null}
+                                {f.evidence_json ? (
+                                  <details style={{ marginTop: 8 }}>
+                                    <summary className="ph-small" style={{ cursor: "pointer" }}>Evidence</summary>
+                                    <pre className="ph-mono" style={{ whiteSpace: "pre-wrap", overflowX: "auto", fontSize: 12, marginTop: 6 }}>
+                                      {safePrettyJson(safeJsonParse(f.evidence_json || "{}") || {})}
+                                    </pre>
+                                  </details>
+                                ) : null}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
 
           {/* Actions */}
           <div>
@@ -1929,7 +2451,7 @@ export default function App() {
           </div>
 
           <div style={{ marginTop: 16 }} className="ph-small">
-            Tip: This is organizer/intel mode only — no replay, no fuzzing. Modules come later.
+            Tip: Actions help you triage. Modules turn that triage into repeatable workflow.
           </div>
         </div>
       </div>

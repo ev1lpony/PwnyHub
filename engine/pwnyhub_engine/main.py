@@ -8,27 +8,27 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlparse
+
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import select
-from fastapi import HTTPException
+
 from pwnyhub_engine.modules.registry import ModuleRegistry
 from .actions import actions_to_json, build_actions
-from .db import Finding, HarEntry, Project, Run, get_session, init_db
+from .db import Finding, HarEntry, Project, Run, Source, get_session, init_db
 from .har_import import is_asset_mime, parse_har
 from .risk import attach_risk
 
-app = FastAPI(title="PwnyHub Engine", version="0.2.0")
+app = FastAPI(title="PwnyHub Engine", version="0.3.1")
 
 module_registry = ModuleRegistry()
 
 # -----------------------------
 # ML Risk Configuration
 # -----------------------------
-ML_RISK_ENABLED: bool = False                    # Change to True when you have a model
-ML_MODEL_PATH: Optional[str] = None              # e.g. "models/risk_model.joblib" later
+ML_RISK_ENABLED: bool = False
+ML_MODEL_PATH: Optional[str] = None
 
-# You can also control it via environment variable
 if os.getenv("PWNYHUB_ML_RISK_ENABLED", "").strip().lower() in ("1", "true", "yes", "on"):
     ML_RISK_ENABLED = True
 if os.getenv("PWNYHUB_ML_MODEL_PATH"):
@@ -54,9 +54,9 @@ ModuleRunner = Callable[[Dict[str, Any]], Dict[str, Any]]
 
 _MODULE_CACHE: Dict[str, Any] = {
     "loaded_at": 0.0,
-    "modules": [],          # list[dict] metadata
-    "runners": {},          # id -> runner
-    "errors": [],           # list[str]
+    "modules": [],
+    "runners": {},
+    "errors": [],
 }
 
 
@@ -65,10 +65,10 @@ def _startup() -> None:
     init_db()
     _refresh_modules_cache()
 
-@app.on_event("startup")
-def _discover_modules():
-    module_registry.discover()
 
+@app.on_event("startup")
+def _discover_modules() -> None:
+    module_registry.discover()
 
 
 @app.get("/")
@@ -96,16 +96,16 @@ def get_ml_settings():
 @app.patch("/settings/ml")
 def update_ml_settings(payload: Dict[str, Any] = Body(...)):
     global ML_RISK_ENABLED, ML_MODEL_PATH
-    
+
     if "enabled" in payload:
         ML_RISK_ENABLED = bool(payload["enabled"])
-    
+
     if "model_path" in payload:
         ML_MODEL_PATH = payload.get("model_path") or None
-    
+
     return {
         "ml_risk_enabled": ML_RISK_ENABLED,
-        "model_path": ML_MODEL_PATH
+        "model_path": ML_MODEL_PATH,
     }
 
 
@@ -124,13 +124,6 @@ def _model_to_dict(x: Any) -> Dict[str, Any]:
 
 
 def _coerce_scope(value: Any) -> str:
-    """
-    Accept either:
-      - newline-separated string
-      - list[str]
-      - None
-    Return newline-separated string for DB storage.
-    """
     if value is None:
         return ""
     if isinstance(value, list):
@@ -139,16 +132,6 @@ def _coerce_scope(value: Any) -> str:
 
 
 def _normalize_scope_pattern(raw: str) -> Optional[str]:
-    """
-    Normalize a user-provided scope line into a host pattern.
-    Supports:
-      - example.com
-      - *.example.com
-      - https://example.com/foo
-      - example.com:443
-      - localhost / 127.0.0.1
-    Returns None if unusable.
-    """
     s = (raw or "").strip()
     if not s:
         return None
@@ -181,15 +164,6 @@ def _normalize_scope_pattern(raw: str) -> Optional[str]:
 
 
 def _parse_scope_lines(scope_text: str) -> List[str]:
-    """
-    Convert stored newline-separated scope into normalized host patterns.
-
-    Convenience behavior:
-      - "example.com" becomes ["example.com", "*.example.com"]
-      - wildcard patterns preserved
-      - blank lines ignored
-      - URLs accepted and normalized
-    """
     out: List[str] = []
     for raw in (scope_text or "").splitlines():
         p = _normalize_scope_pattern(raw)
@@ -223,15 +197,8 @@ def _scope_text_to_lines(scope_text: str) -> List[str]:
 
 
 def _read_upload_limited(upload: UploadFile, *, max_bytes: int) -> bytes:
-    """
-    Read an UploadFile into memory with a hard cap.
-    Prevents accidental OOM for huge HARs.
-
-    NOTE: This still reads into memory (because parse_har expects bytes).
-    True "big HAR" support later = streaming parse.
-    """
     buf = bytearray()
-    chunk_size = 1024 * 1024  # 1MB
+    chunk_size = 1024 * 1024
     while True:
         chunk = upload.file.read(chunk_size)
         if not chunk:
@@ -245,49 +212,7 @@ def _read_upload_limited(upload: UploadFile, *, max_bytes: int) -> bytes:
     return bytes(buf)
 
 
-def _compute_actions_for_project(project_id: int, *, include_risk: bool) -> Dict[str, Any]:
-    """
-    Shared internal helper so modules can reuse the exact same action-building logic.
-    Returns dict containing: actions, allow_hosts, deny_hosts, risk_included
-    """
-    with get_session() as s:
-        p = s.get(Project, project_id)
-        if not p:
-            raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
-
-        entries = s.exec(select(HarEntry).where(HarEntry.project_id == project_id)).all()
-
-        allow_hosts = _parse_scope_lines(p.scope_allow or "")
-        deny_hosts = _parse_scope_lines(p.scope_deny or "")
-
-    acts = build_actions(entries)
-    out = actions_to_json(acts)
-
-    if include_risk:
-        out = attach_risk(
-            out,
-            allow_hosts=allow_hosts,
-            deny_hosts=deny_hosts,
-            use_ml=ML_RISK_ENABLED,
-            model_path=ML_MODEL_PATH
-        )
-
-    return {
-        "actions": out,
-        "allow_hosts": allow_hosts,
-        "deny_hosts": deny_hosts,
-        "risk_included": bool(include_risk),
-    }
-
-
 def _coerce_roe_json(value: Any) -> str:
-    """
-    Accept:
-      - dict/list -> JSON string
-      - JSON string -> normalized JSON string
-      - None/"" -> "{}"
-    Raises 400 if invalid JSON string.
-    """
     if value is None:
         return "{}"
     if isinstance(value, (dict, list)):
@@ -349,6 +274,88 @@ def _default_roe_template(*, qps: float = 3.0) -> Dict[str, Any]:
     }
 
 
+def _source_metadata_obj(raw: str) -> Dict[str, Any]:
+    try:
+        data = json.loads(raw or "{}")
+        if isinstance(data, dict):
+            return data
+        return {"_value": data}
+    except Exception:
+        return {}
+
+
+def _source_to_dict(src: Source, entry_count: Optional[int] = None) -> Dict[str, Any]:
+    out = _model_to_dict(src)
+    out["metadata"] = _source_metadata_obj(getattr(src, "metadata_json", "") or "{}")
+    if entry_count is not None:
+        out["entry_count"] = entry_count
+    return out
+
+
+def _create_source(*, project_id: int, kind: str, name: str, metadata: Optional[Dict[str, Any]] = None) -> Source:
+    now = datetime.now(timezone.utc)
+    src = Source(
+        project_id=project_id,
+        kind=(kind or "manual_har").strip(),
+        name=(name or f"{kind}_{now.strftime('%Y%m%d_%H%M%S')}").strip(),
+        status="running",
+        metadata_json=json.dumps(metadata or {}),
+        error="",
+        created_at=now,
+        started_at=now,
+        finished_at=None,
+    )
+    with get_session() as s:
+        s.add(src)
+        s.commit()
+        s.refresh(src)
+        return src
+
+
+def _finish_source(source_id: int, *, status: str = "done", error: str = "") -> Optional[Source]:
+    with get_session() as s:
+        src = s.get(Source, source_id)
+        if not src:
+            return None
+        src.status = status
+        src.error = error or ""
+        src.finished_at = datetime.now(timezone.utc)
+        s.add(src)
+        s.commit()
+        s.refresh(src)
+        return src
+
+
+def _compute_actions_for_project(project_id: int, *, include_risk: bool) -> Dict[str, Any]:
+    with get_session() as s:
+        p = s.get(Project, project_id)
+        if not p:
+            raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
+
+        entries = s.exec(select(HarEntry).where(HarEntry.project_id == project_id)).all()
+        allow_hosts = _parse_scope_lines(p.scope_allow or "")
+        deny_hosts = _parse_scope_lines(p.scope_deny or "")
+
+    acts = build_actions(entries)
+    out = actions_to_json(acts)
+
+    if include_risk:
+        out = attach_risk(
+            out,
+            allow_hosts=allow_hosts,
+            deny_hosts=deny_hosts,
+            use_ml=ML_RISK_ENABLED,
+            model_path=ML_MODEL_PATH,
+        )
+
+    return {
+        "actions": out,
+        "allow_hosts": allow_hosts,
+        "deny_hosts": deny_hosts,
+        "risk_included": bool(include_risk),
+    }
+
+
 def _builtin_modules() -> List[Dict[str, Any]]:
     return [
         {
@@ -375,20 +382,12 @@ def _safe_module_meta(raw: Any, fallback_id: str) -> Dict[str, Any]:
     meta.setdefault("targets", ["project"])
     meta.setdefault("description", "")
     meta.setdefault("params_schema", {})
-    # Optional future:
-    # meta.setdefault("roe_requirements", {})
     return meta
 
 
 def _load_module_file(path: Path) -> Optional[Dict[str, Any]]:
-    """
-    Load a Python module file that defines:
-      - MODULE: dict metadata
-      - run(ctx): callable returning {"findings": [...], "summary": {...}}
-    """
     try:
         stem = path.stem
-        # Unique module name to avoid collisions in sys.modules
         mod_name = f"pwnyhub_extmod_{stem}_{abs(hash(str(path)))}"
         spec = importlib.util.spec_from_file_location(mod_name, str(path))
         if not spec or not spec.loader:
@@ -410,26 +409,17 @@ def _load_module_file(path: Path) -> Optional[Dict[str, Any]]:
 
 
 def _refresh_modules_cache() -> None:
-    """
-    Build module registry from:
-      - built-ins (always)
-      - optional disk discovery (engine/modules/*.py)
-    """
     _MODULE_CACHE["errors"] = []
     runners: Dict[str, ModuleRunner] = {}
     metas: List[Dict[str, Any]] = []
 
-    # 1) built-ins
     for m in _builtin_modules():
         mid = str(m.get("id") or "").strip()
         if not mid:
             continue
         metas.append(m)
-        # runner provided later in create_run via builtin branch
-        # but also register a stub so /runs can validate.
         runners[mid] = lambda ctx, _mid=mid: {"summary": {"ok": True, "module_id": _mid}, "findings": []}
 
-    # 2) filesystem discovery
     base = Path(__file__).resolve().parent
     mod_dir = base / "modules"
     if mod_dir.exists() and mod_dir.is_dir():
@@ -446,9 +436,7 @@ def _refresh_modules_cache() -> None:
             if not mid:
                 continue
 
-            # Allow override: disk module wins over builtin of same id
             runners[mid] = run_fn
-            # Replace meta if already present
             metas = [x for x in metas if str(x.get("id")) != mid]
             metas.append(meta)
 
@@ -458,18 +446,12 @@ def _refresh_modules_cache() -> None:
 
 
 def _get_module_registry() -> Dict[str, Any]:
-    # Optional hot reload for dev: PWNYHUB_MODULES_RELOAD=1
     if os.getenv("PWNYHUB_MODULES_RELOAD", "").strip() in ("1", "true", "yes", "on"):
         _refresh_modules_cache()
     return _MODULE_CACHE
 
 
 def _normalize_finding_dict(x: Any) -> Optional[Dict[str, Any]]:
-    """
-    Normalize a module-emitted finding dict to DB fields.
-    Expected keys:
-      severity, title, description, evidence, tags, action_keys
-    """
     if not isinstance(x, dict):
         return None
     title = str(x.get("title") or "").strip()
@@ -675,6 +657,49 @@ def patch_project(project_id: int, payload: Dict[str, Any] = Body(...)):
 
 
 # -----------------------------
+# sources
+# -----------------------------
+
+@app.get("/sources")
+def list_sources(project_id: int):
+    with get_session() as s:
+        p = s.get(Project, project_id)
+        if not p:
+            raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
+
+        src_rows = s.exec(
+            select(Source).where(Source.project_id == project_id).order_by(Source.id.desc())
+        ).all()
+
+        entries = s.exec(
+            select(HarEntry).where(HarEntry.project_id == project_id)
+        ).all()
+
+    counts: Dict[int, int] = {}
+    for row in entries:
+        if row.source_id is None:
+            continue
+        counts[row.source_id] = counts.get(row.source_id, 0) + 1
+
+    return {
+        "project_id": project_id,
+        "sources": [_source_to_dict(src, counts.get(int(src.id or 0), 0)) for src in src_rows],
+    }
+
+
+@app.get("/sources/{source_id}")
+def get_source(source_id: int):
+    with get_session() as s:
+        src = s.get(Source, source_id)
+        if not src:
+            raise HTTPException(status_code=404, detail="source not found")
+
+        entries = s.exec(select(HarEntry).where(HarEntry.source_id == source_id)).all()
+
+    return {"source": _source_to_dict(src, len(entries))}
+
+
+# -----------------------------
 # har import
 # -----------------------------
 
@@ -683,60 +708,106 @@ def import_har(
     project_id: int = Form(...),
     file: UploadFile = File(...),
     include_assets: bool = Form(False),
+    source_name: Optional[str] = Form(None),
 ):
     with get_session() as s:
         p = s.get(Project, project_id)
         if not p:
             raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
 
-    max_bytes = int(os.getenv("PWNYHUB_MAX_HAR_BYTES", str(256 * 1024 * 1024)))
-    har_bytes = _read_upload_limited(file, max_bytes=max_bytes)
+    resolved_source_name = (source_name or "").strip() or (file.filename or "").strip()
+    if not resolved_source_name:
+        resolved_source_name = f"manual_har_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
 
-    items = parse_har(har_bytes)
+    src = _create_source(
+        project_id=project_id,
+        kind="manual_har",
+        name=resolved_source_name,
+        metadata={
+            "filename": file.filename or "",
+            "content_type": file.content_type or "",
+            "include_assets": bool(include_assets),
+        },
+    )
 
-    inserted = 0
-    skipped_assets = 0
+    try:
+        max_bytes = int(os.getenv("PWNYHUB_MAX_HAR_BYTES", str(256 * 1024 * 1024)))
+        har_bytes = _read_upload_limited(file, max_bytes=max_bytes)
+        items = parse_har(har_bytes)
 
-    BATCH_N = int(os.getenv("PWNYHUB_INSERT_BATCH", "1000"))
-    batch: List[HarEntry] = []
+        inserted = 0
+        skipped_assets = 0
+        skipped_duplicates = 0
+        BATCH_N = int(os.getenv("PWNYHUB_INSERT_BATCH", "1000"))
+        batch: List[HarEntry] = []
 
-    with get_session() as s:
-        for it in items:
-            if (not include_assets) and is_asset_mime(it.mime):
-                skipped_assets += 1
-                continue
+        with get_session() as s:
+            existing_fps = s.exec(
+                select(HarEntry.entry_fingerprint).where(HarEntry.project_id == project_id)
+            ).all()
+            seen_fps = {str(x) for x in existing_fps if x}
 
-            batch.append(
-                HarEntry(
-                    project_id=project_id,
-                    method=it.method,
-                    url=it.url,
-                    host=it.host,
-                    path=it.path,
-                    query=it.query,
-                    req_headers_json=json.dumps(it.req_headers),
-                    req_body_text=it.req_body,
-                    status=it.status,
-                    mime=it.mime,
-                    resp_headers_json=json.dumps(it.resp_headers),
-                    resp_body_text=it.resp_body,
-                    time_ms=it.time_ms,
-                    body_size=it.body_size,
+            for it in items:
+                if (not include_assets) and is_asset_mime(it.mime):
+                    skipped_assets += 1
+                    continue
+
+                fp = str(getattr(it, "entry_fingerprint", "") or "").strip()
+                if fp and fp in seen_fps:
+                    skipped_duplicates += 1
+                    continue
+
+                if fp:
+                    seen_fps.add(fp)
+
+                batch.append(
+                    HarEntry(
+                        project_id=project_id,
+                        source_id=src.id,
+                        method=it.method,
+                        url=it.url,
+                        host=it.host,
+                        path=it.path,
+                        query=it.query,
+                        normalized_host=getattr(it, "normalized_host", "") or "",
+                        normalized_path=getattr(it, "normalized_path", "/") or "/",
+                        query_keys_json=json.dumps(getattr(it, "query_keys", []) or []),
+                        shape_fingerprint=getattr(it, "shape_fingerprint", "") or "",
+                        entry_fingerprint=fp,
+                        req_headers_json=json.dumps(it.req_headers),
+                        req_body_text=it.req_body,
+                        status=it.status,
+                        mime=it.mime,
+                        resp_headers_json=json.dumps(it.resp_headers),
+                        resp_body_text=it.resp_body,
+                        time_ms=it.time_ms,
+                        body_size=it.body_size,
+                    )
                 )
-            )
-            inserted += 1
+                inserted += 1
 
-            if len(batch) >= BATCH_N:
+                if len(batch) >= BATCH_N:
+                    s.add_all(batch)
+                    s.commit()
+                    batch.clear()
+
+            if batch:
                 s.add_all(batch)
                 s.commit()
                 batch.clear()
 
-        if batch:
-            s.add_all(batch)
-            s.commit()
-            batch.clear()
+        finished = _finish_source(int(src.id or 0), status="done")
+        return {
+            "inserted": inserted,
+            "skipped_assets": skipped_assets,
+            "skipped_duplicates": skipped_duplicates,
+            "total": len(items),
+            "source": _source_to_dict(finished or src, inserted),
+        }
 
-    return {"inserted": inserted, "skipped_assets": skipped_assets, "total": len(items)}
+    except Exception as e:
+        _finish_source(int(src.id or 0), status="failed", error=str(e))
+        raise
 
 
 # -----------------------------
@@ -807,10 +878,6 @@ def list_modules():
 
 @app.post("/runs")
 def create_run(payload: Dict[str, Any] = Body(...)):
-    """
-    MVP: Runs are synchronous (fast modules only).
-    Later: background job queue + progress.
-    """
     try:
         project_id = int(payload.get("project_id") or 0)
     except Exception:
@@ -831,7 +898,6 @@ def create_run(payload: Dict[str, Any] = Body(...)):
     if module_id not in runners:
         raise HTTPException(status_code=400, detail=f"Unknown module_id: {module_id}")
 
-    # Verify project exists + create run row
     with get_session() as s:
         p = s.get(Project, project_id)
         if not p:
@@ -852,9 +918,7 @@ def create_run(payload: Dict[str, Any] = Body(...)):
         s.commit()
         s.refresh(run)
 
-    # Execute module synchronously
     try:
-        # Build controlled ctx for modules
         with get_session() as s:
             p = s.get(Project, project_id)
             if not p:
@@ -874,7 +938,6 @@ def create_run(payload: Dict[str, Any] = Body(...)):
             "now_utc": datetime.now(timezone.utc).isoformat(),
         }
 
-        # Builtin override: keep risk_digest behavior stable
         if module_id == "risk_digest":
             result = _run_builtin_risk_digest(ctx)
         else:
@@ -922,7 +985,6 @@ def create_run(payload: Dict[str, Any] = Body(...)):
 
         findings_created = len(to_insert)
 
-        # Mark run done
         with get_session() as s:
             rr = s.get(Run, run.id)
             if rr:
@@ -946,7 +1008,6 @@ def create_run(payload: Dict[str, Any] = Body(...)):
         }
 
     except Exception as e:
-        # Mark run failed
         with get_session() as s:
             rr = s.get(Run, run.id)
             if rr:
