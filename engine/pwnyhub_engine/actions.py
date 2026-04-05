@@ -138,6 +138,12 @@ def _parse_headers_maybe(x: Any) -> Dict[str, Any]:
     return {}
 
 
+def _top_value_from_counts(d: Dict[str, int]) -> str:
+    if not d:
+        return ""
+    return max(d.items(), key=lambda kv: kv[1])[0]
+
+
 def get_entry_method(entry: Any) -> str:
     for attr in ("method", "request_method"):
         if hasattr(entry, attr) and getattr(entry, attr):
@@ -223,6 +229,33 @@ def get_entry_resp_headers(entry: Any) -> Dict[str, Any]:
     return {}
 
 
+def get_entry_source_id(entry: Any) -> Optional[int]:
+    for attr in ("source_id", "ingest_source_id"):
+        if hasattr(entry, attr):
+            raw = getattr(entry, attr)
+            if raw is None or raw == "":
+                return None
+            try:
+                return int(raw)
+            except Exception:
+                return None
+    return None
+
+
+def get_entry_source_name(entry: Any) -> str:
+    for attr in ("source_name", "ingest_source_name"):
+        if hasattr(entry, attr) and getattr(entry, attr):
+            return str(getattr(entry, attr)).strip()
+    return ""
+
+
+def get_entry_source_kind(entry: Any) -> str:
+    for attr in ("source_kind", "ingest_source_kind"):
+        if hasattr(entry, attr) and getattr(entry, attr):
+            return str(getattr(entry, attr)).strip()
+    return ""
+
+
 def build_sample_url(entry: Any) -> str:
     """
     Prefer stored full URL if available, else reconstruct from host/path/query.
@@ -282,11 +315,24 @@ class ActionRow:
     req_content_type: str
     top_req_content_types: List[Dict[str, Any]]
 
+    # source provenance
+    source_ids: List[int]
+    source_count: int
+    top_sources: List[Dict[str, Any]]
+    source_names: List[str]
+    source_kinds: List[str]
+    top_source_names: List[Dict[str, Any]]
+    top_source_kinds: List[Dict[str, Any]]
+
 
 def build_actions(entries: List[Any], sample_limit: int = 3) -> List[ActionRow]:
     """
     Build "actions": deduped request patterns keyed by (method, host, templated path).
     This is ORGANIZATION / INTEL ONLY (no replay, no fuzzing).
+
+    Source provenance is aggregated across all entries that land in the same action bucket.
+    Current DB-backed HarEntry rows support source_id immediately.
+    Optional source_name/source_kind will populate automatically if upstream enrichment adds them.
     """
     buckets: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
 
@@ -324,6 +370,13 @@ def build_actions(entries: List[Any], sample_limit: int = 3) -> List[ActionRow]:
                 "has_cookie_header": False,
                 "sets_cookie": False,
                 "req_ct_counts": {},      # str -> count
+
+                # source provenance
+                "source_ids": set(),
+                "source_counts": {},      # int -> count
+                "source_name_counts": {}, # str -> count
+                "source_kind_counts": {}, # str -> count
+                "source_meta": {},        # int -> {"name_counts": {}, "kind_counts": {}}
             }
 
         b["count"] += 1
@@ -384,6 +437,33 @@ def build_actions(entries: List[Any], sample_limit: int = 3) -> List[ActionRow]:
             if su and su not in b["sample_urls"]:
                 b["sample_urls"].append(su)
 
+        # source provenance
+        sid = get_entry_source_id(e)
+        sname = get_entry_source_name(e)
+        skind = get_entry_source_kind(e)
+
+        if sid is not None:
+            b["source_ids"].add(sid)
+            b["source_counts"][sid] = b["source_counts"].get(sid, 0) + 1
+
+            meta = b["source_meta"].get(sid)
+            if meta is None:
+                meta = {"name_counts": {}, "kind_counts": {}}
+                b["source_meta"][sid] = meta
+
+            if sname:
+                meta["name_counts"][sname] = meta["name_counts"].get(sname, 0) + 1
+                b["source_name_counts"][sname] = b["source_name_counts"].get(sname, 0) + 1
+
+            if skind:
+                meta["kind_counts"][skind] = meta["kind_counts"].get(skind, 0) + 1
+                b["source_kind_counts"][skind] = b["source_kind_counts"].get(skind, 0) + 1
+        else:
+            if sname:
+                b["source_name_counts"][sname] = b["source_name_counts"].get(sname, 0) + 1
+            if skind:
+                b["source_kind_counts"][skind] = b["source_kind_counts"].get(skind, 0) + 1
+
     out: List[ActionRow] = []
     for (method, host, path_t), b in buckets.items():
         mime_counts: Dict[str, int] = b["mime_counts"]
@@ -397,6 +477,39 @@ def build_actions(entries: List[Any], sample_limit: int = 3) -> List[ActionRow]:
 
         req_ct_counts: Dict[str, int] = b["req_ct_counts"]
         top_req_ct = max(req_ct_counts.items(), key=lambda kv: kv[1])[0] if req_ct_counts else ""
+
+        source_ids_sorted = sorted(list(b["source_ids"]))
+        source_count = len(source_ids_sorted)
+
+        top_sources: List[Dict[str, Any]] = []
+        source_counts: Dict[int, int] = b["source_counts"]
+        source_meta: Dict[int, Dict[str, Dict[str, int]]] = b["source_meta"]
+
+        for item in top_k_int_counts(source_counts, k=10):
+            sid = int(item["value"])
+            meta = source_meta.get(sid) or {}
+            name_counts = meta.get("name_counts") or {}
+            kind_counts = meta.get("kind_counts") or {}
+
+            row: Dict[str, Any] = {
+                "source_id": sid,
+                "count": int(item["count"]),
+            }
+
+            best_name = _top_value_from_counts(name_counts)
+            best_kind = _top_value_from_counts(kind_counts)
+            if best_name:
+                row["name"] = best_name
+            if best_kind:
+                row["kind"] = best_kind
+
+            top_sources.append(row)
+
+        source_name_counts: Dict[str, int] = b["source_name_counts"]
+        source_kind_counts: Dict[str, int] = b["source_kind_counts"]
+
+        source_names = sorted(list(source_name_counts.keys()))
+        source_kinds = sorted(list(source_kind_counts.keys()))
 
         key = f"{method}|{host}|{path_t}"
 
@@ -427,6 +540,14 @@ def build_actions(entries: List[Any], sample_limit: int = 3) -> List[ActionRow]:
                 sets_cookie=bool(b["sets_cookie"]),
                 req_content_type=top_req_ct,
                 top_req_content_types=top_k_counts(req_ct_counts, k=5),
+
+                source_ids=source_ids_sorted,
+                source_count=source_count,
+                top_sources=top_sources,
+                source_names=source_names,
+                source_kinds=source_kinds,
+                top_source_names=top_k_counts(source_name_counts, k=10),
+                top_source_kinds=top_k_counts(source_kind_counts, k=10),
             )
         )
 
@@ -468,6 +589,15 @@ def actions_to_json(actions: List[ActionRow]) -> List[Dict[str, Any]]:
             "sets_cookie": a.sets_cookie,
             "req_content_type": a.req_content_type,
             "top_req_content_types": a.top_req_content_types,
+
+            # source provenance
+            "source_ids": a.source_ids,
+            "source_count": a.source_count,
+            "top_sources": a.top_sources,
+            "source_names": a.source_names,
+            "source_kinds": a.source_kinds,
+            "top_source_names": a.top_source_names,
+            "top_source_kinds": a.top_source_kinds,
         }
         for a in actions
     ]

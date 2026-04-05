@@ -6,6 +6,7 @@ import os
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -326,6 +327,41 @@ def _finish_source(source_id: int, *, status: str = "done", error: str = "") -> 
         return src
 
 
+
+
+def _enrich_entries_with_source_context(entries: List[HarEntry], sources: List[Source]) -> List[Any]:
+    """
+    Attach source_name / source_kind onto entry-like objects before action aggregation.
+
+    We keep HarEntry rows unchanged in DB and only enrich the in-memory objects used
+    for build_actions(), so the rest of the engine stays untouched.
+    """
+    src_map: Dict[int, Source] = {}
+    for src in sources:
+        if getattr(src, "id", None) is None:
+            continue
+        try:
+            src_map[int(src.id)] = src
+        except Exception:
+            continue
+
+    out: List[Any] = []
+    for e in entries:
+        sid = getattr(e, "source_id", None)
+        src = None
+        if sid is not None:
+            try:
+                src = src_map.get(int(sid))
+            except Exception:
+                src = None
+
+        payload = _model_to_dict(e)
+        payload["source_name"] = (getattr(src, "name", "") or "") if src else ""
+        payload["source_kind"] = (getattr(src, "kind", "") or "") if src else ""
+        out.append(SimpleNamespace(**payload))
+    return out
+
+
 def _compute_actions_for_project(project_id: int, *, include_risk: bool) -> Dict[str, Any]:
     with get_session() as s:
         p = s.get(Project, project_id)
@@ -333,10 +369,12 @@ def _compute_actions_for_project(project_id: int, *, include_risk: bool) -> Dict
             raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
 
         entries = s.exec(select(HarEntry).where(HarEntry.project_id == project_id)).all()
+        src_rows = s.exec(select(Source).where(Source.project_id == project_id)).all()
         allow_hosts = _parse_scope_lines(p.scope_allow or "")
         deny_hosts = _parse_scope_lines(p.scope_deny or "")
 
-    acts = build_actions(entries)
+    enriched_entries = _enrich_entries_with_source_context(entries, src_rows)
+    acts = build_actions(enriched_entries)
     out = actions_to_json(acts)
 
     if include_risk:

@@ -1,4 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import SetupWizard from "./components/SetupWizard";
+import SourcesPanel from "./components/SourcesPanel";
+import ModulesPanel from "./components/ModulesPanel";
+import ActionsToolbar from "./components/ActionsToolbar";
+import ActionsTable from "./components/ActionsTable";
+import ActionDetails from "./components/ActionDetails";
+import TopControlsBar from "./components/TopControlsBar";
 
 const DEFAULT_ENGINE = "http://127.0.0.1:8787";
 const LS_KEY = "pwnyhub_ui_v1";
@@ -254,6 +261,7 @@ export default function App() {
   const [fHost, setFHost] = useState(saved.fHost || "");
   const [fMethod, setFMethod] = useState(saved.fMethod || "");
   const [fMime, setFMime] = useState(saved.fMime || "");
+  const [fSourceId, setFSourceId] = useState(saved.fSourceId || "");
   const [q, setQ] = useState(saved.q || "");
   const qDebounced = useDebouncedValue(q, 160);
 
@@ -311,6 +319,7 @@ export default function App() {
   const [wizQps, setWizQps] = useState("3");
   const [wizRoeText, setWizRoeText] = useState("{}");
   const [wizUseAdvanced, setWizUseAdvanced] = useState(true);
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
 
   function openWizardFromCfg(cfg, force = false) {
     if (!cfg?.project) return;
@@ -352,6 +361,7 @@ export default function App() {
       fHost,
       fMethod,
       fMime,
+      fSourceId,
       q,
       onlyHasBody,
       minCount,
@@ -382,6 +392,7 @@ export default function App() {
     fHost,
     fMethod,
     fMime,
+    fSourceId,
     q,
     onlyHasBody,
     minCount,
@@ -614,6 +625,53 @@ export default function App() {
     return Array.from(s).sort();
   }, [actions]);
 
+  const actionSourceOptions = useMemo(() => {
+    const map = new Map();
+
+    for (const s of sources) {
+      const id = String(s?.id ?? "").trim();
+      if (!id) continue;
+      map.set(id, {
+        id,
+        name: s?.name || "",
+        kind: s?.kind || "",
+        entry_count: Number(s?.entry_count || 0),
+      });
+    }
+
+    for (const a of actions) {
+      const topSources = Array.isArray(a?.top_sources) ? a.top_sources : [];
+      for (const ts of topSources) {
+        const id = String(ts?.source_id ?? "").trim();
+        if (!id) continue;
+
+        const prev = map.get(id) || { id, name: "", kind: "", entry_count: 0 };
+        map.set(id, {
+          id,
+          name: prev.name || ts?.name || "",
+          kind: prev.kind || ts?.kind || "",
+          entry_count: prev.entry_count || 0,
+        });
+      }
+
+      const rawIds = Array.isArray(a?.source_ids) ? a.source_ids : [];
+      for (const sid of rawIds) {
+        const id = String(sid ?? "").trim();
+        if (!id || map.has(id)) continue;
+        map.set(id, { id, name: "", kind: "", entry_count: 0 });
+      }
+    }
+
+    return Array.from(map.values()).sort((a, b) => {
+      const an = `${a.name || ""}`.toLowerCase();
+      const bn = `${b.name || ""}`.toLowerCase();
+      if (an && bn && an !== bn) return an.localeCompare(bn);
+      if (an && !bn) return -1;
+      if (!an && bn) return 1;
+      return Number(a.id) - Number(b.id);
+    });
+  }, [sources, actions]);
+
   const filteredActions = useMemo(() => {
     const qq = qDebounced.trim().toLowerCase();
 
@@ -629,6 +687,11 @@ export default function App() {
       .filter((a) => (fHost ? a.host === fHost : true))
       .filter((a) => (fMethod ? a.method === fMethod : true))
       .filter((a) => (fMime ? a.top_mime === fMime : true))
+      .filter((a) => {
+        if (!fSourceId) return true;
+        const ids = Array.isArray(a?.source_ids) ? a.source_ids.map((x) => String(x)) : [];
+        return ids.includes(String(fSourceId));
+      })
       .filter((a) => (onlyHasBody ? !!a.has_body : true))
       .filter((a) => (minCount > 0 ? Number(a.count || 0) >= minCount : true))
       .filter((a) => (minRisk > 0 ? Number(a.risk_score || 0) >= minRisk : true))
@@ -640,7 +703,10 @@ export default function App() {
           (a.method || "").toLowerCase().includes(qq) ||
           (a.top_mime || "").toLowerCase().includes(qq) ||
           (a.key || "").toLowerCase().includes(qq) ||
-          (Array.isArray(a.risk_tags) ? a.risk_tags.join(" ").toLowerCase().includes(qq) : false)
+          (Array.isArray(a.risk_tags) ? a.risk_tags.join(" ").toLowerCase().includes(qq) : false) ||
+          (Array.isArray(a.source_names) ? a.source_names.join(" ").toLowerCase().includes(qq) : false) ||
+          (Array.isArray(a.source_kinds) ? a.source_kinds.join(" ").toLowerCase().includes(qq) : false) ||
+          (Array.isArray(a.source_ids) ? a.source_ids.map((x) => String(x)).join(" ").includes(qq) : false)
         );
       });
 
@@ -705,6 +771,7 @@ export default function App() {
     fHost,
     fMethod,
     fMime,
+    fSourceId,
     qDebounced,
     sortCol,
     sortDir,
@@ -756,6 +823,7 @@ export default function App() {
     fHost,
     fMethod,
     fMime,
+    fSourceId,
     qDebounced,
     actions.length,
     sortCol,
@@ -1258,6 +1326,7 @@ export default function App() {
     setFHost("");
     setFMethod("");
     setFMime("");
+    setFSourceId("");
     setQ("");
     setOnlyHasBody(false);
     setMinCount(0);
@@ -1326,6 +1395,37 @@ export default function App() {
     if (s === "running") return pillStyle("#1c2430", "#cfe0ff");
     if (s === "failed") return pillStyle("#3b1f1f", "#ffd2d2");
     return pillStyle("#222", "#eee");
+  }
+
+  function getSourceMeta(sourceId) {
+    const id = String(sourceId ?? "").trim();
+    if (!id) return null;
+    return sources.find((s) => String(s?.id) === id) || null;
+  }
+
+  function getSourceDisplay(sourceId, fallback = {}) {
+    const live = getSourceMeta(sourceId);
+    return {
+      id: String(sourceId ?? ""),
+      name: live?.name || fallback?.name || "",
+      kind: live?.kind || fallback?.kind || "",
+      entry_count: Number(live?.entry_count || 0),
+      status: live?.status || "",
+    };
+  }
+
+  function inspectSourceId(sourceId) {
+    const id = String(sourceId ?? "").trim();
+    if (!id) return;
+    setSelectedSourceId(id);
+    const el = document.getElementById("ph-source-details");
+    el?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function filterToSourceId(sourceId) {
+    const id = String(sourceId ?? "").trim();
+    setFSourceId(id);
+    if (id) setToast(`Source #${id}`);
   }
 
   function exportActions(list, label = "actions") {
@@ -1431,182 +1531,257 @@ export default function App() {
     return !!setupComplete;
   }, [setupComplete]);
 
-  const wizardOverlay = wizardOpen ? (
-    <div
-      role="dialog"
-      aria-modal="true"
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.65)",
-        zIndex: 9999,
-        display: "flex",
-        alignItems: "flex-start",
-        justifyContent: "center",
-        padding: 18,
+  const handleWizardValidate = ({ allow, deny }) => {
+    setToast(`allow:${allow.length} deny:${deny.length}`);
+  };
+
+  const wizardOverlay = (
+    <SetupWizard
+      open={wizardOpen}
+      modal={true}
+      setupComplete={setupComplete}
+      wizardCanClose={wizardCanClose}
+      projectCfg={projectCfg}
+      projectId={projectId}
+      wizardErr={wizardErr}
+      wizardSaving={wizardSaving}
+      wizardDirty={wizardDirty}
+      engineOk={engineOk}
+      wizAllowText={wizAllowText}
+      setWizAllowText={(value) => {
+        setWizAllowText(value);
+        setWizardDirty(true);
       }}
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget && wizardCanClose) setWizardOpen(false);
+      wizDenyText={wizDenyText}
+      setWizDenyText={(value) => {
+        setWizDenyText(value);
+        setWizardDirty(true);
       }}
-    >
-      <div
-        className="ph-card"
-        style={{
-          width: "min(980px, 96vw)",
-          marginTop: 22,
-          boxShadow: "0 16px 60px rgba(0,0,0,0.35)",
-          padding: 14,
-        }}
-        onMouseDown={(e) => e.stopPropagation()}
-      >
-        <div className="ph-h2" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          Setup Wizard
-          {!setupComplete ? <span style={pillStyle("#2a2020", "#ffd2d2")}>Required</span> : null}
-          <span style={{ marginLeft: "auto", opacity: 0.75 }} className="ph-small">
-            Project: {projectCfg?.project?.name || `id=${projectId || "?"}`}
+      wizQps={wizQps}
+      setWizQps={(value) => {
+        setWizQps(value);
+        setWizardDirty(true);
+      }}
+      wizRoeText={wizRoeText}
+      setWizRoeText={(value) => {
+        setWizRoeText(value);
+        setWizardDirty(true);
+      }}
+      wizUseAdvanced={wizUseAdvanced}
+      setWizUseAdvanced={(value) => {
+        setWizUseAdvanced(value);
+        setWizardDirty(true);
+      }}
+      setWizardDirty={setWizardDirty}
+      pillStyle={pillStyle}
+      parseLinesToList={parseLinesToList}
+      subtitle={
+        <>
+          Set <strong>scope</strong>, <strong>ROE</strong>, and project defaults first. You can import a HAR here before entering the main workspace.
+        </>
+      }
+      tip={
+        <>
+          Tip: Once setup is saved, you can continue into the main workspace and still import more HAR files later.
+        </>
+      }
+      saveLabel="Save setup"
+      onClose={() => setWizardOpen(false)}
+      onLoadDefaultRoe={wizardLoadDefaultRoe}
+      onSave={wizardSave}
+      onValidate={handleWizardValidate}
+    />
+  );
+
+  const onboardingScreen = (
+    <div className={`ph-wrap${focusMode ? " focus" : ""}`}>
+      <h1 style={{ marginBottom: 6, display: "flex", alignItems: "baseline", gap: 12 }}>
+        PwnyHub {toast ? <span style={pillStyle("#1d2b1d", "#c9ffd0")}>{toast}</span> : null}
+      </h1>
+
+      <div className="ph-sub">
+        First-run setup. Choose your project, define scope + ROE, optionally import a HAR, then continue into the main workspace.
+      </div>
+
+      <div className="ph-card" style={{ marginBottom: 16 }}>
+        <div className="ph-row" style={{ alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+          <span className="ph-pill" title={engineOk ? `Last OK: ${engineAgo}` : "Engine down"}>
+            <strong>Engine:</strong>{" "}
+            <span className={engineOk ? "ok" : "down"}>{engineOk ? "OK" : "Down"}</span>{" "}
+            {engineOk && engineAgo ? <span style={{ opacity: 0.7, marginLeft: 8 }}>{engineAgo}</span> : null}
           </span>
+
+          <span className="ph-small">
+            URL:{" "}
+            <input
+              className="ph-input"
+              value={engineUrl}
+              onChange={(e) => setEngineUrl(e.target.value)}
+              style={{ width: 280 }}
+            />
+          </span>
+
+          <button className="ph-btn" onClick={createDemoProject} disabled={!engineOk || busy}>
+            Create demo project
+          </button>
+
+          <select
+            className="ph-select"
+            value={projectId}
+            onChange={(e) => {
+              const pid = e.target.value;
+              setProjectId(pid);
+              setSummary(null);
+              setActions([]);
+              setSelectedActionKey("");
+              setSelectedRunId("");
+              setSelectedSourceId("");
+              setFSourceId("");
+              setMsg("");
+            }}
+            disabled={!engineOk}
+            title="Select project"
+          >
+            <option value="">Select project…</option>
+            {projects.map((p) => (
+              <option key={p.id} value={String(p.id)}>
+                {p.name} (id={p.id})
+                {p.setup_complete === false ? " • setup" : ""}
+              </option>
+            ))}
+          </select>
+
+          {projectId ? (
+            <button className="ph-btn" onClick={() => setWorkspaceOpen(true)} disabled={!setupComplete}>
+              Continue to workspace
+            </button>
+          ) : null}
         </div>
 
-        <div className="ph-small" style={{ opacity: 0.85, marginBottom: 10 }}>
-          Set <strong>scope</strong> and <strong>ROE</strong> first.
-        </div>
-
-        {wizardErr ? (
-          <div className="ph-err" style={{ marginBottom: 10 }}>
-            <div style={{ whiteSpace: "pre-wrap" }}>{wizardErr}</div>
+        {!engineOk && engineErr ? (
+          <div className="ph-err" style={{ marginTop: 12 }}>
+            <div style={{ fontWeight: 900, marginBottom: 6 }}>Engine error</div>
+            <div style={{ whiteSpace: "pre-wrap" }}>{engineErr}</div>
           </div>
         ) : null}
 
-        <div className="ph-row" style={{ gap: 14, alignItems: "flex-start", flexWrap: "wrap" }}>
-          <div style={{ flex: "1 1 420px", minWidth: 320 }}>
-            <div className="ph-h2" style={{ marginTop: 10 }}>
-              Scope allowlist (required)
-            </div>
-            <div className="ph-small" style={{ opacity: 0.8, marginBottom: 6 }}>
-              One per line. Examples: <span className="ph-mono">example.com</span>,{" "}
-              <span className="ph-mono">*.example.com</span>
-            </div>
-            <textarea
-              className="ph-input"
-              style={{ width: "100%", minHeight: 140, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}
-              value={wizAllowText}
-              onChange={(e) => {
-                setWizAllowText(e.target.value);
-                setWizardDirty(true);
-              }}
-              placeholder={"example.com\napi.example.com\n*.dev.example.com"}
-            />
+        {msg ? <div className="ph-msg">{msg}</div> : null}
+      </div>
 
-            <div className="ph-h2" style={{ marginTop: 12 }}>
-              Scope denylist (optional)
-            </div>
-            <div className="ph-small" style={{ opacity: 0.8, marginBottom: 6 }}>
-              Deny always wins. One per line.
-            </div>
-            <textarea
-              className="ph-input"
-              style={{ width: "100%", minHeight: 90, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}
-              value={wizDenyText}
-              onChange={(e) => {
-                setWizDenyText(e.target.value);
-                setWizardDirty(true);
-              }}
-              placeholder={"cdn.example.com\n*.doubleclick.net"}
-            />
+      <SetupWizard
+        open={true}
+        modal={false}
+        setupComplete={setupComplete}
+        wizardCanClose={wizardCanClose}
+        projectCfg={projectCfg}
+        projectId={projectId}
+        wizardErr={wizardErr}
+        wizardSaving={wizardSaving}
+        wizardDirty={wizardDirty}
+        engineOk={engineOk}
+        wizAllowText={wizAllowText}
+        setWizAllowText={(value) => {
+          setWizAllowText(value);
+          setWizardDirty(true);
+        }}
+        wizDenyText={wizDenyText}
+        setWizDenyText={(value) => {
+          setWizDenyText(value);
+          setWizardDirty(true);
+        }}
+        wizQps={wizQps}
+        setWizQps={(value) => {
+          setWizQps(value);
+          setWizardDirty(true);
+        }}
+        wizRoeText={wizRoeText}
+        setWizRoeText={(value) => {
+          setWizRoeText(value);
+          setWizardDirty(true);
+        }}
+        wizUseAdvanced={wizUseAdvanced}
+        setWizUseAdvanced={(value) => {
+          setWizUseAdvanced(value);
+          setWizardDirty(true);
+        }}
+        setWizardDirty={setWizardDirty}
+      pillStyle={pillStyle}
+        parseLinesToList={parseLinesToList}
+        subtitle={
+          <>
+            Set <strong>scope</strong>, <strong>ROE</strong>, and project defaults first. You can import a HAR here before entering the main workspace.
+          </>
+        }
+        tip={
+          <>
+            Tip: Once setup is saved, you can continue into the main workspace and still import more HAR files later.
+          </>
+        }
+        saveLabel="Save setup"
+        onClose={() => setWizardOpen(false)}
+        onLoadDefaultRoe={wizardLoadDefaultRoe}
+        onSave={wizardSave}
+        onValidate={handleWizardValidate}
+      />
 
-            <div className="ph-row" style={{ marginTop: 12, alignItems: "center" }}>
-              <span className="ph-small" style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                QPS (global):
-                <input
-                  className="ph-input"
-                  style={{ width: 120 }}
-                  value={wizQps}
-                  onChange={(e) => {
-                    setWizQps(e.target.value);
-                    setWizardDirty(true);
-                  }}
-                  inputMode="decimal"
-                />
-              </span>
-
-              <button className="ph-btn" onClick={wizardLoadDefaultRoe} disabled={!engineOk || wizardSaving}>
-                Load ROE defaults
-              </button>
-
-              <label className="ph-small" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <input
-                  type="checkbox"
-                  checked={wizUseAdvanced}
-                  onChange={(e) => {
-                    setWizUseAdvanced(e.target.checked);
-                    setWizardDirty(true);
-                  }}
-                />
-                Advanced ROE JSON
-              </label>
-            </div>
-          </div>
-
-          <div style={{ flex: "1 1 420px", minWidth: 320 }}>
-            <div className="ph-h2" style={{ marginTop: 10 }}>
-              ROE (Rules of Engagement)
-            </div>
-
-            {wizUseAdvanced ? (
-              <textarea
-                className="ph-input"
-                style={{ width: "100%", minHeight: 320, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}
-                value={wizRoeText}
-                onChange={(e) => {
-                  setWizRoeText(e.target.value);
-                  setWizardDirty(true);
-                }}
-                placeholder={'{\n  "version": 1,\n  "network": { "qps": 3 }\n}'}
-              />
-            ) : (
-              <div className="ph-small" style={{ opacity: 0.85 }}>
-                Turn on “Advanced ROE JSON” to edit directly.
-              </div>
-            )}
-
-            <div className="ph-row" style={{ marginTop: 10, alignItems: "center", flexWrap: "wrap" }}>
-              <button className="ph-btn" onClick={wizardSave} disabled={!engineOk || wizardSaving}>
-                {wizardSaving ? "Saving…" : "Finish setup"}
-              </button>
-
-              <button
-                className="ph-btn"
-                onClick={() => setWizardOpen(false)}
-                disabled={!wizardCanClose || wizardSaving}
-                title={!wizardCanClose ? "Setup is required before continuing" : "Close"}
-              >
-                Close
-              </button>
-
-              <button
-                className="ph-btn"
-                onClick={() => {
-                  const allow = parseLinesToList(wizAllowText);
-                  const deny = parseLinesToList(wizDenyText);
-                  setToast(`allow:${allow.length} deny:${deny.length}`);
-                }}
-                disabled={wizardSaving}
-                title="Quick sanity check"
-              >
-                Validate
-              </button>
-
-              {wizardDirty ? <span className="ph-small" style={{ opacity: 0.75 }}>Unsaved changes</span> : null}
-            </div>
-          </div>
+      <div className="ph-card" style={{ marginTop: 16 }}>
+        <div className="ph-h2" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          Optional HAR import
+          {!setupComplete && projectId ? <span style={pillStyle("#2a2020", "#ffd2d2")}>Finish setup first</span> : null}
         </div>
 
-        <div className="ph-small" style={{ marginTop: 12, opacity: 0.75 }}>
-          Tip: You can reopen this anytime via <strong>Settings</strong>.
+        <div className="ph-small" style={{ opacity: 0.8, marginBottom: 10 }}>
+          You can import now to seed the workspace, or skip this and import later from the main screen.
+        </div>
+
+        <div className="ph-row" style={{ alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+          <input
+            className="ph-input"
+            type="file"
+            accept=".har,application/json"
+            onChange={(e) => setFile(e.target.files?.[0] || null)}
+            disabled={!engineOk || !setupComplete}
+            title={!setupComplete ? "Complete setup first" : ""}
+          />
+
+          <input
+            className="ph-input"
+            value={sourceName}
+            onChange={(e) => setSourceName(e.target.value)}
+            placeholder="source name (optional)"
+            style={{ width: 210 }}
+            disabled={!engineOk || !setupComplete}
+          />
+
+          <label className="ph-small" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <input
+              type="checkbox"
+              checked={includeAssets}
+              onChange={(e) => setIncludeAssets(e.target.checked)}
+              disabled={!setupComplete}
+            />
+            include assets
+          </label>
+
+          <button
+            className="ph-btn"
+            onClick={importHar}
+            disabled={!engineOk || busy || !projectId || !file || !setupComplete}
+          >
+            {busy ? "Working…" : "Import HAR"}
+          </button>
+
+          <button className="ph-btn" onClick={() => setWorkspaceOpen(true)} disabled={!projectId || !setupComplete}>
+            Start workspace
+          </button>
         </div>
       </div>
     </div>
-  ) : null;
+  );
+
+  if (!workspaceOpen) {
+    return onboardingScreen;
+  }
 
   return (
     <div className={`ph-wrap${focusMode ? " focus" : ""}`}>
@@ -1622,176 +1797,48 @@ export default function App() {
 
       <div className="ph-card">
         {/* Top controls */}
-        <div className="ph-topbar">
-          <div className="ph-row" style={{ alignItems: "center" }}>
-            <span className="ph-pill" title={engineOk ? `Last OK: ${engineAgo}` : "Engine down"}>
-              <strong>Engine:</strong>{" "}
-              <span className={engineOk ? "ok" : "down"}>{engineOk ? "OK" : "Down"}</span>{" "}
-              {engineOk && engineAgo ? <span style={{ opacity: 0.7, marginLeft: 8 }}>{engineAgo}</span> : null}
-            </span>
-
-            <span className="ph-small">
-              URL:{" "}
-              <input
-                className="ph-input"
-                value={engineUrl}
-                onChange={(e) => setEngineUrl(e.target.value)}
-                style={{ width: 280 }}
-              />
-            </span>
-
-            <button className="ph-btn" onClick={createDemoProject} disabled={!engineOk || busy}>
-              Create demo project
-            </button>
-
-            <select
-              className="ph-select"
-              value={projectId}
-              onChange={(e) => {
-                const pid = e.target.value;
-                setProjectId(pid);
-                setSummary(null);
-                setActions([]);
-                setSelectedActionKey("");
-                setSelectedRunId("");
-                setSelectedSourceId("");
-                setMsg("");
-              }}
-              disabled={!engineOk}
-              title="Select project"
-            >
-              <option value="">Select project…</option>
-              {projects.map((p) => (
-                <option key={p.id} value={String(p.id)}>
-                  {p.name} (id={p.id})
-                  {p.setup_complete === false ? " • setup" : ""}
-                </option>
-              ))}
-            </select>
-
-            <button
-              className="ph-btn"
-              onClick={() => {
-                if (!projectId) return setToast("Pick project");
-                if (projectCfg?.project) openWizardFromCfg(projectCfg, true);
-                else setWizardOpen(true);
-              }}
-              disabled={!engineOk || !projectId}
-              title="Edit scope/ROE/QPS"
-            >
-              Settings
-            </button>
-
-            <label className="ph-small" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <input
-                type="checkbox"
-                checked={autoLoadOnProjectSelect}
-                onChange={(e) => setAutoLoadOnProjectSelect(e.target.checked)}
-                disabled={!setupComplete}
-                title={!setupComplete ? "Complete setup first" : ""}
-              />
-              Auto-load
-            </label>
-
-            <label className="ph-small" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <input type="checkbox" checked={focusMode} onChange={(e) => setFocusMode(e.target.checked)} />
-              Focus mode
-            </label>
-
-            <input
-              className="ph-input"
-              type="file"
-              accept=".har,application/json"
-              onChange={(e) => setFile(e.target.files?.[0] || null)}
-              disabled={!engineOk || !setupComplete}
-              title={!setupComplete ? "Complete setup first" : ""}
-            />
-
-            <input
-              className="ph-input"
-              value={sourceName}
-              onChange={(e) => setSourceName(e.target.value)}
-              placeholder="source name (optional)"
-              style={{ width: 210 }}
-              disabled={!engineOk || !setupComplete}
-              title={!setupComplete ? "Complete setup first" : "Friendly label for this import source"}
-            />
-
-            <label className="ph-small" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <input
-                type="checkbox"
-                checked={includeAssets}
-                onChange={(e) => setIncludeAssets(e.target.checked)}
-                disabled={!setupComplete}
-                title={!setupComplete ? "Complete setup first" : ""}
-              />
-              include assets
-            </label>
-
-            <label className="ph-small" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <input
-                type="checkbox"
-                checked={includeRisk}
-                onChange={(e) => setIncludeRisk(e.target.checked)}
-                disabled={!setupComplete}
-                title={!setupComplete ? "Complete setup first" : ""}
-              />
-              include risk
-            </label>
-
-            <label className="ph-small" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <input
-                type="checkbox"
-                checked={mlEnabled}
-                onChange={toggleMlRisk}
-                disabled={!engineOk || !setupComplete}
-              />
-              ML Risk Scoring
-              {mlEnabled && <span style={pillStyle("#1f2c1f", "#c9ffd0")}>ON</span>}
-            </label>
-
-            <button
-              className="ph-btn"
-              onClick={importHar}
-              disabled={!engineOk || busy || !projectId || !file || !setupComplete}
-              title={!setupComplete ? "Complete setup first" : "Import HAR into selected project"}
-            >
-              {busy ? "Working…" : "Import HAR"}
-            </button>
-
-            <button
-              className="ph-btn"
-              onClick={() => refreshSummary()}
-              disabled={!engineOk || !projectId || busy}
-              title="Refresh summary"
-            >
-              Refresh summary
-            </button>
-
-            <button
-              className="ph-btn"
-              onClick={() => loadActions()}
-              disabled={!engineOk || !projectId || busyActions || !setupComplete}
-              title={!setupComplete ? "Complete setup first" : "Load actions"}
-            >
-              {busyActions ? "Loading…" : "Load actions"}
-            </button>
-
-            {!setupComplete && projectId ? (
-              <span style={{ marginLeft: 10, ...pillStyle("#2a2020", "#ffd2d2") }}>Setup required</span>
-            ) : null}
-          </div>
-        </div>
-
-        {/* Errors / messages */}
-        {!engineOk && engineErr ? (
-          <div className="ph-err">
-            <div style={{ fontWeight: 900, marginBottom: 6 }}>Engine error</div>
-            <div style={{ whiteSpace: "pre-wrap" }}>{engineErr}</div>
-          </div>
-        ) : null}
-
-        {msg ? <div className="ph-msg">{msg}</div> : null}
+        <TopControlsBar
+          engineOk={engineOk}
+          engineErr={engineErr}
+          engineAgo={engineAgo}
+          engineUrl={engineUrl}
+          setEngineUrl={setEngineUrl}
+          createDemoProject={createDemoProject}
+          busy={busy}
+          projects={projects}
+          projectId={projectId}
+          setProjectId={setProjectId}
+          setSummary={setSummary}
+          setActions={setActions}
+          setSelectedActionKey={setSelectedActionKey}
+          setSelectedRunId={setSelectedRunId}
+          setSelectedSourceId={setSelectedSourceId}
+          setFSourceId={setFSourceId}
+          setMsg={setMsg}
+          projectCfg={projectCfg}
+          openWizardFromCfg={openWizardFromCfg}
+          setWizardOpen={setWizardOpen}
+          setToast={setToast}
+          autoLoadOnProjectSelect={autoLoadOnProjectSelect}
+          setAutoLoadOnProjectSelect={setAutoLoadOnProjectSelect}
+          setupComplete={setupComplete}
+          focusMode={focusMode}
+          setFocusMode={setFocusMode}
+          setFile={setFile}
+          sourceName={sourceName}
+          setSourceName={setSourceName}
+          includeAssets={includeAssets}
+          setIncludeAssets={setIncludeAssets}
+          includeRisk={includeRisk}
+          setIncludeRisk={setIncludeRisk}
+          mlEnabled={mlEnabled}
+          toggleMlRisk={toggleMlRisk}
+          importHar={importHar}
+          refreshSummary={refreshSummary}
+          loadActions={loadActions}
+          busyActions={busyActions}
+          file={file}
+        />
 
         <div className="ph-content">
           {/* Summary */}
@@ -1827,625 +1874,144 @@ export default function App() {
           ) : null}
 
           {/* Sources / Ingest */}
-          <div style={{ marginBottom: 18 }}>
-            <div className="ph-h2" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              Sources / Ingest
-              <span style={pillStyle("#1c2430", "#cfe0ff")}>sources: {sources.length}</span>
-
-              <span style={{ marginLeft: "auto", display: "inline-flex", gap: 8, flexWrap: "wrap" }}>
-                <button className="ph-btn" onClick={() => loadSources()} disabled={!engineOk || !projectId || sourcesBusy || !setupComplete}>
-                  {sourcesBusy ? "Loading sources…" : "Refresh sources"}
-                </button>
-              </span>
-            </div>
-
-            {!setupComplete ? (
-              <div className="ph-small">Finish project setup first, then you can inspect project sources.</div>
-            ) : (
-              <div className="ph-grid">
-                <div className="ph-tableWrap">
-                  <div className="ph-card" style={{ padding: 12 }}>
-                    <div className="ph-h2" style={{ marginBottom: 8 }}>Project sources</div>
-                    {!sources.length ? (
-                      <div className="ph-small">No sources yet for this project. Import a HAR to create the first source.</div>
-                    ) : (
-                      <div style={{ display: "grid", gap: 8 }}>
-                        {sources.slice(0, 20).map((s) => {
-                          const isSel = String(s.id) === String(selectedSourceId);
-                          return (
-                            <button
-                              key={s.id}
-                              className="ph-btn"
-                              onClick={() => setSelectedSourceId(String(s.id))}
-                              style={{
-                                justifyContent: "flex-start",
-                                textAlign: "left",
-                                padding: 10,
-                                border: isSel ? "1px solid rgba(120,180,255,0.8)" : undefined,
-                              }}
-                            >
-                              <span className="ph-row" style={{ width: "100%", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                                <span className="ph-mono">#{s.id}</span>
-                                <span style={sourceStatusStyle(s.status)}>{s.status || "unknown"}</span>
-                                <span style={pillStyle("#222", "#eee")}>{s.kind || "source"}</span>
-                                <span style={{ fontWeight: 800 }}>{s.name || "(unnamed source)"}</span>
-                                <span className="ph-small" style={{ opacity: 0.75 }}>
-                                  entries: {fmtInt(s.entry_count)}
-                                </span>
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="right">
-                  <div className="ph-card" style={{ padding: 12 }}>
-                    <div className="ph-h2" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                      Source details
-                      {selectedSource ? <span style={sourceStatusStyle(selectedSource.status)}>{selectedSource.status || "unknown"}</span> : null}
-                    </div>
-
-                    {!selectedSource ? (
-                      <div className="ph-small">Select a source to inspect its ingest details.</div>
-                    ) : (
-                      <>
-                        <div className="ph-kv" style={{ marginTop: 10 }}><strong>Source ID:</strong> <span className="ph-mono">{selectedSource.id}</span></div>
-                        <div className="ph-kv"><strong>Name:</strong> {selectedSource.name || "—"}</div>
-                        <div className="ph-kv"><strong>Kind:</strong> <span className="ph-mono">{selectedSource.kind || "—"}</span></div>
-                        <div className="ph-kv"><strong>Entries:</strong> {fmtInt(selectedSource.entry_count)}</div>
-                        <div className="ph-kv"><strong>Created:</strong> {selectedSource.created_at || "—"}</div>
-                        <div className="ph-kv"><strong>Finished:</strong> {selectedSource.finished_at || "—"}</div>
-
-                        {selectedSource.error ? (
-                          <div className="ph-err" style={{ marginTop: 10 }}>
-                            <div style={{ fontWeight: 900, marginBottom: 6 }}>Source error</div>
-                            <div style={{ whiteSpace: "pre-wrap" }}>{selectedSource.error}</div>
-                          </div>
-                        ) : null}
-
-                        <div className="ph-h2" style={{ marginTop: 14 }}>Metadata</div>
-                        <pre className="ph-mono" style={{ whiteSpace: "pre-wrap", overflowX: "auto", fontSize: 12 }}>
-                          {safePrettyJson(selectedSource.metadata || {})}
-                        </pre>
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
+          <SourcesPanel
+            engineOk={engineOk}
+            projectId={projectId}
+            setupComplete={setupComplete}
+            sources={sources}
+            sourcesBusy={sourcesBusy}
+            selectedSourceId={selectedSourceId}
+            selectedSource={selectedSource}
+            fSourceId={fSourceId}
+            pillStyle={pillStyle}
+            sourceStatusStyle={sourceStatusStyle}
+            fmtInt={fmtInt}
+            safePrettyJson={safePrettyJson}
+            onRefreshSources={() => loadSources()}
+            onSelectSource={(id) => setSelectedSourceId(id)}
+            onFilterToSource={filterToSourceId}
+            onClearSourceFilter={() => setFSourceId("")}
+          />
 
           {/* Modules / Runs / Findings */}
-          <div style={{ marginBottom: 18 }}>
-            <div className="ph-h2" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              Modules & Runs
-              <span style={pillStyle("#1c2430", "#cfe0ff")}>modules: {modules.length}</span>
-              <span style={pillStyle("#1c2430", "#cfe0ff")}>runs: {runs.length}</span>
-
-              <span style={{ marginLeft: "auto", display: "inline-flex", gap: 8, flexWrap: "wrap" }}>
-                <button className="ph-btn" onClick={() => loadModules()} disabled={!engineOk || modulesBusy}>
-                  {modulesBusy ? "Loading modules…" : "Refresh modules"}
-                </button>
-                <button className="ph-btn" onClick={() => loadRuns()} disabled={!engineOk || !projectId || runsBusy || !setupComplete}>
-                  {runsBusy ? "Loading runs…" : "Refresh runs"}
-                </button>
-              </span>
-            </div>
-
-            {!setupComplete ? (
-              <div className="ph-small">Finish project setup first, then you can run modules.</div>
-            ) : (
-              <div className="ph-grid">
-                <div className="ph-tableWrap">
-                  <div className="ph-card" style={{ padding: 12 }}>
-                    <div className="ph-row" style={{ alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                      <select
-                        className="ph-select"
-                        value={selectedModuleId}
-                        onChange={(e) => setSelectedModuleId(e.target.value)}
-                        disabled={!modules.length || modulesBusy}
-                      >
-                        <option value="">Select module…</option>
-                        {modules.map((m) => (
-                          <option key={m.id} value={String(m.id)}>
-                            {m.name || m.id}
-                          </option>
-                        ))}
-                      </select>
-
-                      {selectedModuleId === "risk_digest" ? (
-                        <span className="ph-small" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                          min risk:
-                          <input
-                            className="ph-input"
-                            style={{ width: 88 }}
-                            value={String(moduleMinRisk)}
-                            onChange={(e) => setModuleMinRisk(Math.max(0, Math.min(100, parseInt(e.target.value || "0", 10) || 0)))}
-                            inputMode="numeric"
-                          />
-                        </span>
-                      ) : null}
-
-                      <button
-                        className="ph-btn"
-                        onClick={runSelectedModule}
-                        disabled={!engineOk || !projectId || !selectedModuleId || moduleRunBusy || !setupComplete}
-                      >
-                        {moduleRunBusy ? "Running…" : "Run module"}
-                      </button>
-                    </div>
-
-                    {selectedModule ? (
-                      <div style={{ marginTop: 12 }}>
-                        <div className="ph-row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-                          <span style={pillStyle("#1c2430", "#cfe0ff")}>{selectedModule.id}</span>
-                          <span style={pillStyle("#222", "#eee")}>{selectedModule.kind || "module"}</span>
-                          {Array.isArray(selectedModule.targets)
-                            ? selectedModule.targets.map((t) => (
-                                <span key={t} style={pillStyle("#1f2230", "#cfd7ff")}>{t}</span>
-                              ))
-                            : null}
-                        </div>
-                        <div className="ph-small" style={{ opacity: 0.9 }}>
-                          {selectedModule.description || "No description."}
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="ph-small" style={{ marginTop: 12 }}>Select a module to inspect and run it.</div>
-                    )}
-                  </div>
-
-                  <div className="ph-card" style={{ padding: 12, marginTop: 12 }}>
-                    <div className="ph-h2" style={{ marginBottom: 8 }}>Recent runs</div>
-                    {!runs.length ? (
-                      <div className="ph-small">No runs yet for this project.</div>
-                    ) : (
-                      <div style={{ display: "grid", gap: 8 }}>
-                        {runs.slice(0, 12).map((r) => {
-                          const isSel = String(r.id) === String(selectedRunId);
-                          const summaryObj = safeJsonParse(r.summary_json || "{}") || {};
-                          const findingsCreated = Number(summaryObj?.findings_created || 0);
-                          return (
-                            <button
-                              key={r.id}
-                              className="ph-btn"
-                              onClick={() => setSelectedRunId(String(r.id))}
-                              style={{
-                                justifyContent: "flex-start",
-                                textAlign: "left",
-                                padding: 10,
-                                border: isSel ? "1px solid rgba(120,180,255,0.8)" : undefined,
-                              }}
-                            >
-                              <span className="ph-row" style={{ width: "100%", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                                <span className="ph-mono">#{r.id}</span>
-                                <span style={runStatusStyle(r.status)}>{r.status || "unknown"}</span>
-                                <span style={pillStyle("#222", "#eee")}>{r.module_id}</span>
-                                <span className="ph-small" style={{ opacity: 0.75 }}>
-                                  findings: {findingsCreated}
-                                </span>
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="right">
-                  <div className="ph-card" style={{ padding: 12 }}>
-                    <div className="ph-h2" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                      Run details
-                      {selectedRun ? <span style={runStatusStyle(selectedRun.status)}>{selectedRun.status || "unknown"}</span> : null}
-                    </div>
-
-                    {!selectedRun ? (
-                      <div className="ph-small">Select a run to inspect its summary and findings.</div>
-                    ) : (
-                      <>
-                        <div className="ph-kv" style={{ marginTop: 10 }}><strong>Run ID:</strong> <span className="ph-mono">{selectedRun.id}</span></div>
-                        <div className="ph-kv"><strong>Module:</strong> <span className="ph-mono">{selectedRun.module_id}</span></div>
-                        <div className="ph-kv"><strong>Created:</strong> {selectedRun.created_at || "—"}</div>
-                        <div className="ph-kv"><strong>Finished:</strong> {selectedRun.finished_at || "—"}</div>
-
-                        {selectedRun.error ? (
-                          <div className="ph-err" style={{ marginTop: 10 }}>
-                            <div style={{ fontWeight: 900, marginBottom: 6 }}>Run error</div>
-                            <div style={{ whiteSpace: "pre-wrap" }}>{selectedRun.error}</div>
-                          </div>
-                        ) : null}
-
-                        <div className="ph-h2" style={{ marginTop: 14 }}>Summary</div>
-                        <pre className="ph-mono" style={{ whiteSpace: "pre-wrap", overflowX: "auto", fontSize: 12 }}>
-                          {safePrettyJson(selectedRunSummary)}
-                        </pre>
-
-                        <div className="ph-h2" style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 8 }}>
-                          Findings
-                          <span style={pillStyle("#1c2430", "#cfe0ff")}>{runFindings.length}</span>
-                        </div>
-
-                        {findingsBusy ? (
-                          <div className="ph-small">Loading findings…</div>
-                        ) : !runFindings.length ? (
-                          <div className="ph-small">No findings for this run.</div>
-                        ) : (
-                          <div style={{ display: "grid", gap: 10, marginTop: 8 }}>
-                            {runFindings.slice(0, 20).map((f) => (
-                              <div key={f.id} className="ph-card" style={{ padding: 10 }}>
-                                <div className="ph-row" style={{ alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                                  <span style={severityStyle(f.severity)}>{f.severity || "info"}</span>
-                                  <span className="ph-mono">#{f.id}</span>
-                                  <span style={pillStyle("#222", "#eee")}>{f.module_id}</span>
-                                </div>
-                                <div style={{ fontWeight: 800, marginTop: 8 }}>{f.title || "(untitled finding)"}</div>
-                                {f.description ? (
-                                  <div className="ph-small" style={{ whiteSpace: "pre-wrap", marginTop: 6 }}>
-                                    {f.description}
-                                  </div>
-                                ) : null}
-                                {f.evidence_json ? (
-                                  <details style={{ marginTop: 8 }}>
-                                    <summary className="ph-small" style={{ cursor: "pointer" }}>Evidence</summary>
-                                    <pre className="ph-mono" style={{ whiteSpace: "pre-wrap", overflowX: "auto", fontSize: 12, marginTop: 6 }}>
-                                      {safePrettyJson(safeJsonParse(f.evidence_json || "{}") || {})}
-                                    </pre>
-                                  </details>
-                                ) : null}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
+          <ModulesPanel
+            engineOk={engineOk}
+            projectId={projectId}
+            setupComplete={setupComplete}
+            modules={modules}
+            modulesBusy={modulesBusy}
+            runs={runs}
+            runsBusy={runsBusy}
+            runFindings={runFindings}
+            findingsBusy={findingsBusy}
+            selectedModuleId={selectedModuleId}
+            selectedModule={selectedModule}
+            selectedRunId={selectedRunId}
+            selectedRun={selectedRun}
+            selectedRunSummary={selectedRunSummary}
+            moduleRunBusy={moduleRunBusy}
+            moduleMinRisk={moduleMinRisk}
+            pillStyle={pillStyle}
+            runStatusStyle={runStatusStyle}
+            severityStyle={severityStyle}
+            safeJsonParse={safeJsonParse}
+            safePrettyJson={safePrettyJson}
+            onRefreshModules={() => loadModules()}
+            onRefreshRuns={() => loadRuns()}
+            onSelectModule={(id) => setSelectedModuleId(id)}
+            onSetModuleMinRisk={(value) =>
+              setModuleMinRisk(Math.max(0, Math.min(100, parseInt(value || "0", 10) || 0)))
+            }
+            onRunSelectedModule={runSelectedModule}
+            onSelectRun={(id) => setSelectedRunId(id)}
+          />
 
           {/* Actions */}
           <div>
-            <div className="ph-h2" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              Actions
-              <span style={pillStyle("#1c2430", "#cfe0ff")}>showing {filteredActions.length} / {actions.length}</span>
-              <span className="ph-small" style={{ opacity: 0.75 }}>{activeSortExplain()}</span>
-
-              <span style={{ marginLeft: "auto", display: "inline-flex", gap: 8, flexWrap: "wrap" }}>
-                <button className="ph-btn" onClick={() => exportActions(actions, "actions_all")} disabled={!actions.length}>
-                  Export all
-                </button>
-                <button className="ph-btn" onClick={() => exportActions(filteredActions, "actions_filtered")} disabled={!filteredActions.length}>
-                  Export filtered
-                </button>
-                <button className="ph-btn" onClick={() => copyJson(filteredActions, "Copied filtered")} disabled={!filteredActions.length}>
-                  Copy filtered JSON
-                </button>
-                <button className="ph-btn" onClick={() => (selectedAction ? copyJson(selectedAction, "Copied action") : setToast("No action"))} disabled={!selectedAction}>
-                  Copy action JSON
-                </button>
-              </span>
-            </div>
-
-            {/* Filters */}
-            <div className="ph-row" style={{ marginBottom: 10, alignItems: "center" }}>
-              <select className="ph-select" value={fHost} onChange={(e) => setFHost(e.target.value)}>
-                <option value="">All hosts</option>
-                {hostOptions.map((h) => <option key={h} value={h}>{h}</option>)}
-              </select>
-
-              <select className="ph-select" value={fMethod} onChange={(e) => setFMethod(e.target.value)}>
-                <option value="">All methods</option>
-                {methodOptions.map((m) => <option key={m} value={m}>{m}</option>)}
-              </select>
-
-              <select className="ph-select" value={fMime} onChange={(e) => setFMime(e.target.value)}>
-                <option value="">All MIME</option>
-                {mimeOptions.map((m) => <option key={m} value={m}>{m}</option>)}
-              </select>
-
-              <input
-                ref={searchRef}
-                className="ph-input"
-                placeholder="Search host/path/mime/tags… (Ctrl/Cmd+K or /)"
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                style={{ width: 360 }}
-                title={keyHint}
-                disabled={!setupComplete}
-              />
-
-              <label className="ph-small" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <input type="checkbox" checked={onlyHasBody} onChange={(e) => setOnlyHasBody(e.target.checked)} disabled={!setupComplete} />
-                has body
-              </label>
-
-              <span className="ph-small" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                min count:
-                <input
-                  className="ph-input"
-                  style={{ width: 88 }}
-                  value={String(minCount)}
-                  onChange={(e) => setMinCount(Math.max(0, parseInt(e.target.value || "0", 10) || 0))}
-                  inputMode="numeric"
-                  disabled={!setupComplete}
-                />
-              </span>
-
-              {hasRisk ? (
-                <span className="ph-small" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                  min risk:
-                  <input
-                    className="ph-input"
-                    style={{ width: 88 }}
-                    value={String(minRisk)}
-                    onChange={(e) => setMinRisk(Math.max(0, parseInt(e.target.value || "0", 10) || 0))}
-                    inputMode="numeric"
-                    disabled={!setupComplete}
-                  />
-                </span>
-              ) : null}
-
-              <button className="ph-btn" onClick={resetUi} disabled={!setupComplete}>Reset UI</button>
-
-              <button
-                className={`ph-btn ${excludedTagSet.size ? "ph-btn-active" : ""}`}
-                onClick={() => setTagFilterOpen((v) => !v)}
-                disabled={!setupComplete}
-              >
-                Tag filters{excludedTagSet.size ? ` (${excludedTagSet.size} hidden)` : ""}
-              </button>
-
-              <div className="ph-small" style={{ marginLeft: "auto", opacity: 0.75 }}>{keyHint}</div>
-            </div>
-
-            {tagFilterPanel}
-
-            {/* Column toggles */}
-            <div className="ph-row" style={{ marginBottom: 10, alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-              <span className="ph-small" style={{ fontWeight: 800, opacity: 0.75 }}>Columns:</span>
-
-              {Object.keys(defaultCols).map((k) => {
-                if (k === "risk" && !hasRisk) return null;
-                return (
-                  <label key={k} className="ph-small" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                    <input type="checkbox" checked={!!cols[k]} onChange={() => toggleCol(k)} disabled={!setupComplete} />
-                    {k}
-                  </label>
-                );
-              })}
-
-              {hasRisk ? (
-                <span className="ph-small" style={{ marginLeft: 12, display: "inline-flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ opacity: 0.75, fontWeight: 800 }}>Risk legend:</span>
-                  <span style={riskStyle(0)}>0</span>
-                  <span style={riskStyle(35)}>35</span>
-                  <span style={riskStyle(70)}>70</span>
-                  <span style={riskStyle(100)}>100</span>
-                </span>
-              ) : null}
-            </div>
-
-            <div className="ph-small" style={{ marginBottom: 10, opacity: 0.8 }}>
-              Sort tip: click a column header to sort (desc → asc → normal). Normal = {hasRisk ? "risk desc" : "count desc"}.
-            </div>
+            <ActionsToolbar
+              actions={actions}
+              filteredActions={filteredActions}
+              hasRisk={hasRisk}
+              fSourceId={fSourceId}
+              pillStyle={pillStyle}
+              activeSortExplain={activeSortExplain}
+              exportActions={exportActions}
+              copyJson={copyJson}
+              selectedAction={selectedAction}
+              fHost={fHost}
+              setFHost={setFHost}
+              hostOptions={hostOptions}
+              fMethod={fMethod}
+              setFMethod={setFMethod}
+              methodOptions={methodOptions}
+              fMime={fMime}
+              setFMime={setFMime}
+              mimeOptions={mimeOptions}
+              actionSourceOptions={actionSourceOptions}
+              setFSourceId={setFSourceId}
+              searchRef={searchRef}
+              q={q}
+              setQ={setQ}
+              keyHint={keyHint}
+              setupComplete={setupComplete}
+              onlyHasBody={onlyHasBody}
+              setOnlyHasBody={setOnlyHasBody}
+              minCount={minCount}
+              setMinCount={setMinCount}
+              minRisk={minRisk}
+              setMinRisk={setMinRisk}
+              resetUi={resetUi}
+              excludedTagSet={excludedTagSet}
+              tagFilterOpen={tagFilterOpen}
+              setTagFilterOpen={setTagFilterOpen}
+              tagFilterPanel={tagFilterPanel}
+              defaultCols={defaultCols}
+              cols={cols}
+              toggleCol={toggleCol}
+              riskStyle={riskStyle}
+            />
 
             {!setupComplete ? (
-              <div className="ph-small">Setup is required before actions view is enabled. Click <strong>Settings</strong>.</div>
+              <div className="ph-small">
+                Setup is required before actions view is enabled. Click <strong>Settings</strong>.
+              </div>
             ) : actions.length === 0 ? (
-              <div className="ph-small">No actions loaded yet. Import a HAR or click “Load actions”.</div>
+              <div className="ph-small">
+                No actions loaded yet. Import a HAR or click “Load actions”.
+              </div>
             ) : (
               <div className="ph-grid">
-                {/* Table */}
-                <div className="ph-tableWrap">
-                  <div className="ph-tableScroll" ref={tableScrollRef}>
-                    <table className="ph-table">
-                      <thead>
-                        <tr>
-                          {cols.count ? <th style={{ cursor: "pointer" }} onClick={() => toggleSort("count")}>Count{sortMark("count")}</th> : null}
-                          {hasRisk && cols.risk ? <th style={{ cursor: "pointer" }} onClick={() => toggleSort("risk")}>Risk{sortMark("risk")}</th> : null}
-                          {cols.method ? <th style={{ cursor: "pointer" }} onClick={() => toggleSort("method")}>Method{sortMark("method")}</th> : null}
-                          {cols.host ? <th style={{ cursor: "pointer" }} onClick={() => toggleSort("host")}>Host{sortMark("host")}</th> : null}
-                          {cols.path ? <th style={{ cursor: "pointer" }} onClick={() => toggleSort("path")}>Path template{sortMark("path")}</th> : null}
-                          {cols.mime ? <th style={{ cursor: "pointer" }} onClick={() => toggleSort("mime")}>Top MIME{sortMark("mime")}</th> : null}
-                          {cols.statuses ? <th>Statuses</th> : null}
-                          {cols.bytes ? <th style={{ cursor: "pointer" }} onClick={() => toggleSort("bytes")}>Avg bytes{sortMark("bytes")}</th> : null}
-                          {cols.time ? <th style={{ cursor: "pointer" }} onClick={() => toggleSort("time")}>Avg ms{sortMark("time")}</th> : null}
-                          {cols.body ? <th style={{ cursor: "pointer" }} onClick={() => toggleSort("body")}>Body?{sortMark("body")}</th> : null}
-                        </tr>
-                      </thead>
+                <ActionsTable
+                  filteredActions={filteredActions}
+                  selectedActionKey={selectedActionKey}
+                  setSelectedActionKey={setSelectedActionKey}
+                  cols={cols}
+                  hasRisk={hasRisk}
+                  toggleSort={toggleSort}
+                  sortMark={sortMark}
+                  riskStyle={riskStyle}
+                  pillStyle={pillStyle}
+                  fmtInt={fmtInt}
+                  fmtMs={fmtMs}
+                  tableScrollRef={tableScrollRef}
+                />
 
-                      <tbody>
-                        {filteredActions.map((a) => {
-                          const isSel = a.key === selectedActionKey;
-                          const tags = Array.isArray(a.risk_tags) ? a.risk_tags : [];
-                          const miniTag = tags.includes("scope_unset")
-                            ? "scope_unset"
-                            : tags.includes("out_of_scope")
-                              ? "out_of_scope"
-                              : tags.includes("third_party")
-                                ? "third_party"
-                                : tags.includes("denylisted_host")
-                                  ? "denylisted"
-                                  : "";
-
-                          return (
-                            <tr
-                              key={a.key}
-                              data-rowkey={a.key}
-                              onClick={() => setSelectedActionKey(a.key)}
-                              className={`ph-tr ${isSel ? "selected" : ""}`}
-                              title={tags?.length ? `tags: ${tags.join(", ")}` : ""}
-                            >
-                              {cols.count ? <td>{a.count}</td> : null}
-
-                              {hasRisk && cols.risk ? (
-                                <td>
-                                  <span style={riskStyle(a.risk_score)}>{fmtInt(a.risk_score)}</span>
-                                  {miniTag ? <span style={{ marginLeft: 8, ...pillStyle("#2a2020", "#ffd2d2") }}>{miniTag}</span> : null}
-                                </td>
-                              ) : null}
-
-                              {cols.method ? <td>{a.method}</td> : null}
-                              {cols.host ? <td className="ph-mono">{a.host}</td> : null}
-                              {cols.path ? <td className="ph-mono">{a.path_template}</td> : null}
-                              {cols.mime ? <td className="ph-mono">{a.top_mime}</td> : null}
-
-                              {cols.statuses ? (
-                                <td>
-                                  {(a.status_codes || []).slice(0, 6).join(", ")}
-                                  {(a.status_codes || []).length > 6 ? "…" : ""}
-                                </td>
-                              ) : null}
-
-                              {cols.bytes ? <td>{fmtInt(a.avg_resp_bytes)}</td> : null}
-                              {cols.time ? <td>{fmtMs(a.avg_time_ms)}</td> : null}
-                              {cols.body ? <td>{a.has_body ? "yes" : ""}</td> : null}
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                {/* Details */}
-                <div className="right" id="ph-details">
-                  <div className="ph-h2" style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    Details
-                    {selectedAction?.risk_score !== undefined ? (
-                      <span style={riskStyle(selectedAction.risk_score)}>{fmtInt(selectedAction.risk_score)}</span>
-                    ) : null}
-                  </div>
-
-                  {!selectedAction ? (
-                    <div className="ph-small">Click an action row.</div>
-                  ) : (
-                    <>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-                        <button
-                          className="ph-btn"
-                          onClick={() => copyToClipboard(selectedAction.key).then((ok) => setToast(ok ? "Copied key" : "Copy failed"))}
-                        >
-                          Copy key
-                        </button>
-                        <button
-                          className="ph-btn"
-                          disabled={!selectedAction.host}
-                          onClick={() => copyToClipboard(selectedAction.host || "").then((ok) => setToast(ok ? "Copied host" : "Copy failed"))}
-                        >
-                          Copy host
-                        </button>
-                        <button
-                          className="ph-btn"
-                          disabled={!selectedAction.path_template}
-                          onClick={() => copyToClipboard(selectedAction.path_template || "").then((ok) => setToast(ok ? "Copied path" : "Copy failed"))}
-                        >
-                          Copy path
-                        </button>
-                        <button
-                          className="ph-btn"
-                          disabled={!selectedAction.sample_urls?.length}
-                          onClick={() => copyToClipboard(selectedAction.sample_urls?.[0] || "").then((ok) => setToast(ok ? "Copied URL" : "Copy failed"))}
-                        >
-                          Copy URL
-                        </button>
-                        <button
-                          className="ph-btn"
-                          disabled={!selectedAction.sample_urls?.length}
-                          onClick={() => {
-                            const u = selectedAction.sample_urls?.[0] || "";
-                            if (u) window.open(u, "_blank", "noopener,noreferrer");
-                          }}
-                        >
-                          Open URL
-                        </button>
-                      </div>
-
-                      <div className="ph-mono" style={{ fontSize: 12, opacity: 0.9 }}>{selectedAction.key}</div>
-
-                      {scopeBadges.length ? (
-                        <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                          {scopeBadges.map((b) => <span key={b.t} style={pillStyle(b.bg, b.fg)}>{b.t}</span>)}
-                        </div>
-                      ) : null}
-
-                      <div className="ph-kv" style={{ marginTop: 10 }}><strong>Count:</strong> {selectedAction.count}</div>
-                      <div className="ph-kv"><strong>Avg bytes:</strong> {fmtInt(selectedAction.avg_resp_bytes)}</div>
-                      <div className="ph-kv"><strong>Avg time:</strong> {fmtMs(selectedAction.avg_time_ms)} ms</div>
-                      <div className="ph-kv"><strong>Has body:</strong> {selectedAction.has_body ? "yes" : "no"}</div>
-
-                      {selectedAction.risk_score !== undefined ? (
-                        <div className="ph-kv">
-                          <strong>Risk:</strong> <span style={riskStyle(selectedAction.risk_score)}>{fmtInt(selectedAction.risk_score)}</span>{" "}
-                          {Array.isArray(selectedAction.risk_tags) && selectedAction.risk_tags.length ? `(${selectedAction.risk_tags.join(", ")})` : ""}
-                        </div>
-                      ) : null}
-
-                      {selectedAction?.ml_confidence !== undefined && (
-                        <div className="ph-kv">
-                          <strong>ML Confidence:</strong>{" "}
-                          {(selectedAction.ml_confidence * 100).toFixed(0)}%
-                          {selectedAction.risk_tags?.includes("ml-boosted") && (
-                            <span style={pillStyle("#1f2c1f", "#c9ffd0")}>ml-boosted</span>
-                          )}
-                        </div>
-                      )}
-
-                      {Array.isArray(selectedAction.sample_urls) && selectedAction.sample_urls.length ? (
-                        <>
-                          <div className="ph-h2" style={{ marginTop: 14 }}>Sample URLs</div>
-                          <ul className="ph-list">
-                            {selectedAction.sample_urls.slice(0, 10).map((u) => (
-                              <li key={u} style={{ wordBreak: "break-all", display: "flex", alignItems: "center", gap: 10 }}>
-                                <span className="ph-mono" style={{ flex: 1 }}>{u}</span>
-                                <button className="ph-btn" onClick={() => copyToClipboard(u).then((ok) => setToast(ok ? "Copied" : "Copy failed"))}>Copy</button>
-                                <button className="ph-btn" onClick={() => window.open(u, "_blank", "noopener,noreferrer")}>Open</button>
-                              </li>
-                            ))}
-                          </ul>
-                        </>
-                      ) : null}
-
-                      {Array.isArray(selectedAction.top_query_keys) && selectedAction.top_query_keys.length ? (
-                        <>
-                          <div className="ph-h2" style={{ marginTop: 14 }}>Top query keys</div>
-                          <ul className="ph-list">
-                            {selectedAction.top_query_keys.slice(0, 16).map((x) => (
-                              <li key={x.value}><span className="ph-mono">{x.value}</span> — {x.count}</li>
-                            ))}
-                          </ul>
-                        </>
-                      ) : null}
-
-                      {Array.isArray(selectedAction.top_statuses) && selectedAction.top_statuses.length ? (
-                        <>
-                          <div className="ph-h2" style={{ marginTop: 14 }}>Top statuses</div>
-                          <ul className="ph-list">
-                            {selectedAction.top_statuses.slice(0, 12).map((x) => (
-                              <li key={String(x.value)}><span className="ph-mono">{String(x.value)}</span> — {x.count}</li>
-                            ))}
-                          </ul>
-                        </>
-                      ) : null}
-
-                      {Array.isArray(selectedAction.top_mimes) && selectedAction.top_mimes.length ? (
-                        <>
-                          <div className="ph-h2" style={{ marginTop: 14 }}>Top mimes</div>
-                          <ul className="ph-list">
-                            {selectedAction.top_mimes.slice(0, 12).map((x) => (
-                              <li key={x.value}><span className="ph-mono">{x.value}</span> — {x.count}</li>
-                            ))}
-                          </ul>
-                        </>
-                      ) : null}
-                    </>
-                  )}
-                </div>
+                <ActionDetails
+                  selectedAction={selectedAction}
+                  scopeBadges={scopeBadges}
+                  pillStyle={pillStyle}
+                  riskStyle={riskStyle}
+                  fmtInt={fmtInt}
+                  fmtMs={fmtMs}
+                  copyToClipboard={copyToClipboard}
+                  setToast={setToast}
+                  fSourceId={fSourceId}
+                  setFSourceId={setFSourceId}
+                  getSourceDisplay={getSourceDisplay}
+                  sourceStatusStyle={sourceStatusStyle}
+                  inspectSourceId={inspectSourceId}
+                  filterToSourceId={filterToSourceId}
+                />
               </div>
             )}
           </div>
