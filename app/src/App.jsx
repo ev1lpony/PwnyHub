@@ -319,6 +319,8 @@ export default function App() {
   const [wizQps, setWizQps] = useState("3");
   const [wizRoeText, setWizRoeText] = useState("{}");
   const [wizUseAdvanced, setWizUseAdvanced] = useState(true);
+  const [wizEnabledModules, setWizEnabledModules] = useState([]);
+  const [wizModuleConfigs, setWizModuleConfigs] = useState({});
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
 
   function openWizardFromCfg(cfg, force = false) {
@@ -341,6 +343,12 @@ export default function App() {
     setWizDenyText(listToLines(denyLines));
     setWizQps(String(p?.qps ?? 3));
     setWizRoeText(String(p?.roe_json || safePrettyJson(p?.roe || {})));
+    setWizEnabledModules(Array.isArray(p?.enabled_modules) ? p.enabled_modules.map((x) => String(x)) : []);
+    setWizModuleConfigs(
+      p?.module_configs && typeof p.module_configs === "object" && !Array.isArray(p.module_configs)
+        ? p.module_configs
+        : {}
+    );
 
     setWizardErr("");
     setWizardDirty(false);
@@ -1492,6 +1500,11 @@ export default function App() {
         scope_deny: denyList,
         qps: qpsNum,
         roe: roeObj,
+        enabled_modules: Array.isArray(wizEnabledModules) ? wizEnabledModules.map((x) => String(x)) : [],
+        module_configs:
+          wizModuleConfigs && typeof wizModuleConfigs === "object" && !Array.isArray(wizModuleConfigs)
+            ? wizModuleConfigs
+            : {},
       };
 
       const data = await jfetch(`${engineUrl}/projects/${encodeURIComponent(projectId)}`, {
@@ -1531,8 +1544,13 @@ export default function App() {
     return !!setupComplete;
   }, [setupComplete]);
 
-  const handleWizardValidate = ({ allow, deny }) => {
-    setToast(`allow:${allow.length} deny:${deny.length}`);
+  const handleWizardValidate = ({ allow, deny, enabled_modules, module_configs }) => {
+    const em = Array.isArray(enabled_modules) ? enabled_modules.length : 0;
+    const mc =
+      module_configs && typeof module_configs === "object" && !Array.isArray(module_configs)
+        ? Object.keys(module_configs).length
+        : 0;
+    setToast(`allow:${allow.length} deny:${deny.length} mods:${em}/${mc}`);
   };
 
   const wizardOverlay = (
@@ -1573,6 +1591,12 @@ export default function App() {
         setWizardDirty(true);
       }}
       setWizardDirty={setWizardDirty}
+      modules={modules}
+      modulesBusy={modulesBusy}
+      wizEnabledModules={wizEnabledModules}
+      setWizEnabledModules={setWizEnabledModules}
+      wizModuleConfigs={wizModuleConfigs}
+      setWizModuleConfigs={setWizModuleConfigs}
       pillStyle={pillStyle}
       parseLinesToList={parseLinesToList}
       subtitle={
@@ -1637,6 +1661,8 @@ export default function App() {
               setSelectedRunId("");
               setSelectedSourceId("");
               setFSourceId("");
+              setWizEnabledModules([]);
+              setWizModuleConfigs({});
               setMsg("");
             }}
             disabled={!engineOk}
@@ -1705,7 +1731,13 @@ export default function App() {
           setWizardDirty(true);
         }}
         setWizardDirty={setWizardDirty}
-      pillStyle={pillStyle}
+        modules={modules}
+        modulesBusy={modulesBusy}
+        wizEnabledModules={wizEnabledModules}
+        setWizEnabledModules={setWizEnabledModules}
+        wizModuleConfigs={wizModuleConfigs}
+        setWizModuleConfigs={setWizModuleConfigs}
+        pillStyle={pillStyle}
         parseLinesToList={parseLinesToList}
         subtitle={
           <>

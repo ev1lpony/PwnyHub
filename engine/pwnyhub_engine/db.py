@@ -18,6 +18,12 @@ class Project(SQLModel, table=True):
     # Keep as string for schema flexibility while iterating.
     roe_json: str = "{}"
 
+    # Setup-flow module configuration persisted at the project level.
+    # enabled_modules_json: list[str]
+    # module_configs_json: { [module_id]: { ...params } }
+    enabled_modules_json: str = "[]"
+    module_configs_json: str = "{}"
+
 
 class Source(SQLModel, table=True):
     """
@@ -156,6 +162,8 @@ def init_db() -> None:
     # Lightweight forward-only migration for existing SQLite DBs.
     # SQLModel/SQLAlchemy won't auto-add new columns to an existing table.
     _sqlite_add_column_if_missing("project", "roe_json", "TEXT NOT NULL DEFAULT '{}'")
+    _sqlite_add_column_if_missing("project", "enabled_modules_json", "TEXT NOT NULL DEFAULT '[]'")
+    _sqlite_add_column_if_missing("project", "module_configs_json", "TEXT NOT NULL DEFAULT '{}'")
     _sqlite_add_column_if_missing("harentry", "source_id", "INTEGER")
 
     _sqlite_add_column_if_missing("harentry", "normalized_host", "TEXT NOT NULL DEFAULT ''")
@@ -175,6 +183,8 @@ def init_db() -> None:
     # Optional: keep DB consistent if nulls slipped in.
     with engine.begin() as conn:
         conn.execute(text("UPDATE project SET roe_json='{}' WHERE roe_json IS NULL"))
+        conn.execute(text("UPDATE project SET enabled_modules_json='[]' WHERE enabled_modules_json IS NULL"))
+        conn.execute(text("UPDATE project SET module_configs_json='{}' WHERE module_configs_json IS NULL"))
 
         conn.execute(text("UPDATE harentry SET normalized_host='' WHERE normalized_host IS NULL"))
         conn.execute(text("UPDATE harentry SET normalized_path='/' WHERE normalized_path IS NULL OR normalized_path=''"))

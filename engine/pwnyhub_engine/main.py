@@ -228,6 +228,44 @@ def _coerce_roe_json(value: Any) -> str:
     return json.dumps(parsed)
 
 
+
+def _coerce_enabled_modules_json(value: Any) -> str:
+    if value is None:
+        return "[]"
+    if isinstance(value, list):
+        return json.dumps([str(x).strip() for x in value if str(x).strip()])
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return "[]"
+        try:
+            parsed = json.loads(s)
+        except Exception:
+            raise HTTPException(status_code=400, detail="enabled_modules must be valid JSON (string) or a list")
+        if not isinstance(parsed, list):
+            raise HTTPException(status_code=400, detail="enabled_modules must be a list")
+        return json.dumps([str(x).strip() for x in parsed if str(x).strip()])
+    raise HTTPException(status_code=400, detail="enabled_modules must be a list")
+
+
+def _coerce_module_configs_json(value: Any) -> str:
+    if value is None:
+        return "{}"
+    if isinstance(value, dict):
+        return json.dumps(value)
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return "{}"
+        try:
+            parsed = json.loads(s)
+        except Exception:
+            raise HTTPException(status_code=400, detail="module_configs must be valid JSON (string) or an object")
+        if not isinstance(parsed, dict):
+            raise HTTPException(status_code=400, detail="module_configs must be an object")
+        return json.dumps(parsed)
+    raise HTTPException(status_code=400, detail="module_configs must be an object")
+
 def _project_setup_complete(p: Project) -> bool:
     allow_hosts = _parse_scope_lines(p.scope_allow or "")
     return len(allow_hosts) > 0
@@ -242,6 +280,22 @@ def _project_config_response(p: Project) -> Dict[str, Any]:
     except Exception:
         roe_obj = {}
 
+    enabled_modules_obj: List[str] = []
+    try:
+        raw_enabled = json.loads(getattr(p, "enabled_modules_json", "") or "[]")
+        if isinstance(raw_enabled, list):
+            enabled_modules_obj = [str(x).strip() for x in raw_enabled if str(x).strip()]
+    except Exception:
+        enabled_modules_obj = []
+
+    module_configs_obj: Dict[str, Any] = {}
+    try:
+        raw_cfg = json.loads(getattr(p, "module_configs_json", "") or "{}")
+        if isinstance(raw_cfg, dict):
+            module_configs_obj = raw_cfg
+    except Exception:
+        module_configs_obj = {}
+
     return {
         "id": p.id,
         "name": p.name,
@@ -254,6 +308,10 @@ def _project_config_response(p: Project) -> Dict[str, Any]:
         },
         "roe": roe_obj,
         "roe_json": getattr(p, "roe_json", "") or "{}",
+        "enabled_modules": enabled_modules_obj,
+        "enabled_modules_json": getattr(p, "enabled_modules_json", "") or "[]",
+        "module_configs": module_configs_obj,
+        "module_configs_json": getattr(p, "module_configs_json", "") or "{}",
         "setup_complete": _project_setup_complete(p),
     }
 
@@ -632,15 +690,32 @@ def create_project(payload: Dict[str, Any] = Body(...)):
         qps = 3.0
 
     roe_json = _coerce_roe_json(payload.get("roe_json") if "roe_json" in payload else payload.get("roe"))
+    enabled_modules_json = _coerce_enabled_modules_json(payload.get("enabled_modules")) if "enabled_modules" in payload else "[]"
+    module_configs_json = _coerce_module_configs_json(payload.get("module_configs")) if "module_configs" in payload else "{}"
 
-    p = Project(name=name, scope_allow=scope_allow, scope_deny=scope_deny, qps=qps, roe_json=roe_json)  # type: ignore[arg-type]
+    p = Project(
+        name=name,
+        scope_allow=scope_allow,
+        scope_deny=scope_deny,
+        qps=qps,
+        roe_json=roe_json,
+        enabled_modules_json=enabled_modules_json,
+        module_configs_json=module_configs_json,
+    )  # type: ignore[arg-type]
 
     with get_session() as s:
         s.add(p)
         s.commit()
         s.refresh(p)
 
-    return {"id": p.id, "name": p.name, "qps": p.qps, "setup_complete": _project_setup_complete(p)}
+    return {
+        "id": p.id,
+        "name": p.name,
+        "qps": p.qps,
+        "enabled_modules": json.loads(getattr(p, "enabled_modules_json", "") or "[]"),
+        "module_configs": json.loads(getattr(p, "module_configs_json", "") or "{}"),
+        "setup_complete": _project_setup_complete(p),
+    }
 
 
 @app.get("/projects")
@@ -686,6 +761,12 @@ def patch_project(project_id: int, payload: Dict[str, Any] = Body(...)):
         if "roe_json" in payload or "roe" in payload:
             raw = payload.get("roe_json") if "roe_json" in payload else payload.get("roe")
             p.roe_json = _coerce_roe_json(raw)  # type: ignore[attr-defined]
+
+        if "enabled_modules" in payload:
+            p.enabled_modules_json = _coerce_enabled_modules_json(payload.get("enabled_modules"))  # type: ignore[attr-defined]
+
+        if "module_configs" in payload:
+            p.module_configs_json = _coerce_module_configs_json(payload.get("module_configs"))  # type: ignore[attr-defined]
 
         s.add(p)
         s.commit()
