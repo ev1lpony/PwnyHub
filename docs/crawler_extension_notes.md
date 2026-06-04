@@ -9,6 +9,4 @@ Project Policy Profile / ROE
   -> scope allow/deny
   -> asset tier / no-bounty / out-of-scope policy
   -> network limits and QPS
-  -> authenticated test-account context when explicitly provided
-  -> crawler source output
-  -> actions/risk/p
+  -> authenticated
