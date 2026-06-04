@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from typing import Any, Dict, List
 
 from pwnyhub_engine.policy import apply_policy_to_actions, policy_summary
@@ -35,6 +36,50 @@ MODULE = {
         },
     },
 }
+
+
+def _install_policy_autowire() -> None:
+    """
+    Additive integration hook.
+
+    main.py already discovers modules on startup. Loading this module lets us enrich the
+    existing /actions path without rewriting the large engine file: every computed action
+    receives policy fields/tags derived from the saved Program Policy Profile.
+    """
+    main_mod = sys.modules.get("pwnyhub_engine.main")
+    if main_mod is None:
+        return
+    if getattr(main_mod, "_POLICY_AUTOWIRE_INSTALLED", False):
+        return
+    original = getattr(main_mod, "_compute_actions_for_project", None)
+    if not callable(original):
+        return
+
+    def _policy_compute_actions_for_project(project_id: int, *, include_risk: bool) -> Dict[str, Any]:
+        data = original(project_id, include_risk=include_risk)
+        project_cfg: Dict[str, Any] = {}
+        try:
+            with main_mod.get_session() as s:
+                p = s.get(main_mod.Project, project_id)
+                if p:
+                    project_cfg = main_mod._project_config_response(p)
+        except Exception:
+            project_cfg = {}
+
+        actions = data.get("actions") if isinstance(data, dict) else []
+        if isinstance(actions, list):
+            enriched = apply_policy_to_actions(actions, project_cfg)
+            data["actions"] = enriched
+            data["policy_included"] = True
+            data["policy_summary"] = policy_summary(enriched)
+        return data
+
+    main_mod._POLICY_AUTOWIRE_INSTALLED = True
+    main_mod._policy_original_compute_actions_for_project = original
+    main_mod._compute_actions_for_project = _policy_compute_actions_for_project
+
+
+_install_policy_autowire()
 
 
 def _int_param(params: Dict[str, Any], key: str, default: int) -> int:
