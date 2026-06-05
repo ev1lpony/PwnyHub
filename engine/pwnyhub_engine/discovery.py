@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qsl, urlparse
 
 from sqlmodel import select
@@ -12,10 +12,9 @@ from sqlmodel import select
 from .db import Asset, DiscoveryObservation, DiscoveredLink, Endpoint, Parameter, Technology, WebForm, get_session
 
 
-def now_utc() -> datetime:
+def _now():
     return datetime.now(timezone.utc)
 
 
-def dumps(value: Any) -> str:
-    try:
-        return json.dumps(value if
+def _json(x: Any) -> str:
+    try
