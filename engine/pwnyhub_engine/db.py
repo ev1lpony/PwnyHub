@@ -84,6 +84,133 @@ class HarEntry(SQLModel, table=True):
 
 
 # ------------------------------
+# Normalized discovery graph
+# ------------------------------
+
+class Asset(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_id: int = Field(index=True)
+    source_id: Optional[int] = Field(default=None, index=True)
+
+    host: str = Field(index=True)
+    scheme: str = Field(default="https", index=True)
+    port: Optional[int] = Field(default=None, index=True)
+    asset_type: str = Field(default="web", index=True)  # web|api|mobile|infra|unknown
+    status: str = Field(default="observed", index=True)  # observed|in_scope|no_bounty|out_of_scope|review
+
+    first_seen_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
+    last_seen_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
+    metadata_json: str = "{}"
+
+
+class Endpoint(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_id: int = Field(index=True)
+    source_id: Optional[int] = Field(default=None, index=True)
+
+    fingerprint: str = Field(index=True)
+    host: str = Field(index=True)
+    method: str = Field(default="GET", index=True)
+    path: str = Field(index=True)
+    normalized_path: str = Field(default="/", index=True)
+    query_keys_json: str = "[]"
+
+    hit_count: int = 0
+    status_codes_json: str = "[]"
+    mimes_json: str = "[]"
+
+    first_seen_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
+    last_seen_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
+    metadata_json: str = "{}"
+
+
+class Parameter(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_id: int = Field(index=True)
+    source_id: Optional[int] = Field(default=None, index=True)
+
+    fingerprint: str = Field(index=True)
+    host: str = Field(index=True)
+    endpoint_fingerprint: str = Field(index=True)
+    location: str = Field(default="query", index=True)  # query|body|path|header|cookie|form
+    name: str = Field(index=True)
+
+    sample_values_json: str = "[]"
+    observed_count: int = 0
+    first_seen_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
+    last_seen_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
+    metadata_json: str = "{}"
+
+
+class WebForm(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_id: int = Field(index=True)
+    source_id: Optional[int] = Field(default=None, index=True)
+
+    fingerprint: str = Field(index=True)
+    page_url: str = Field(index=True)
+    action_url: str = Field(index=True)
+    method: str = Field(default="GET", index=True)
+    host: str = Field(default="", index=True)
+    fields_json: str = "[]"
+
+    first_seen_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
+    last_seen_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
+    metadata_json: str = "{}"
+
+
+class DiscoveredLink(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_id: int = Field(index=True)
+    source_id: Optional[int] = Field(default=None, index=True)
+
+    fingerprint: str = Field(index=True)
+    from_url: str = Field(index=True)
+    url: str = Field(index=True)
+    host: str = Field(default="", index=True)
+    link_type: str = Field(default="link", index=True)  # link|script|asset|form_action|redirect|js_url
+    depth: int = Field(default=0, index=True)
+    status: str = Field(default="queued", index=True)  # queued|visited|skipped|observed
+    reason: str = ""
+
+    first_seen_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
+    last_seen_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
+    metadata_json: str = "{}"
+
+
+class Technology(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_id: int = Field(index=True)
+    source_id: Optional[int] = Field(default=None, index=True)
+
+    fingerprint: str = Field(index=True)
+    host: str = Field(index=True)
+    name: str = Field(index=True)
+    category: str = Field(default="unknown", index=True)  # server|framework|cdn|language|analytics|security|unknown
+    evidence_json: str = "{}"
+
+    first_seen_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
+    last_seen_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
+    metadata_json: str = "{}"
+
+
+class DiscoveryObservation(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_id: int = Field(index=True)
+    source_id: Optional[int] = Field(default=None, index=True)
+
+    fingerprint: str = Field(index=True)
+    kind: str = Field(index=True)          # auth_gate|redirect|rate_limit|server_error|interesting_status|note
+    severity: str = Field(default="info", index=True)  # info|low|med|high
+    host: str = Field(default="", index=True)
+    url: str = Field(default="", index=True)
+    title: str = Field(index=True)
+    details_json: str = "{}"
+
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
+
+
+# ------------------------------
 # Module backbone: Runs + Findings
 # ------------------------------
 
@@ -179,6 +306,15 @@ def init_db() -> None:
     _sqlite_create_index_if_missing("ix_harentry_normalized_path", "harentry", "normalized_path")
     _sqlite_create_index_if_missing("ix_harentry_shape_fingerprint", "harentry", "shape_fingerprint")
     _sqlite_create_index_if_missing("ix_harentry_entry_fingerprint", "harentry", "entry_fingerprint")
+
+    # discovery graph indexes
+    _sqlite_create_index_if_missing("ix_asset_project_host", "asset", "project_id, host")
+    _sqlite_create_index_if_missing("ix_endpoint_project_fp", "endpoint", "project_id, fingerprint")
+    _sqlite_create_index_if_missing("ix_parameter_project_fp", "parameter", "project_id, fingerprint")
+    _sqlite_create_index_if_missing("ix_webform_project_fp", "webform", "project_id, fingerprint")
+    _sqlite_create_index_if_missing("ix_discoveredlink_project_fp", "discoveredlink", "project_id, fingerprint")
+    _sqlite_create_index_if_missing("ix_technology_project_fp", "technology", "project_id, fingerprint")
+    _sqlite_create_index_if_missing("ix_discoveryobservation_project_fp", "discoveryobservation", "project_id, fingerprint")
 
     # Optional: keep DB consistent if nulls slipped in.
     with engine.begin() as conn:
